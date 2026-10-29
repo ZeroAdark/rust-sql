@@ -1,0 +1,50 @@
+name: Linux validation
+on:
+  push:
+    branches: [main, 'hardening/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_server:
+        description: Build the complete server and run disposable-cluster recovery checks
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo test --locked -j 2 -p gravity_program -p pgsync
+      - run: python3 -m py_compile scripts/validation/server_smoke.py scripts/validation/mixed_workload.py scripts/validation/compare_mixed.py
+      - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cache-pressure
+          path: cache-pressure.csv
+  server:
+    if: github.event_name == 'workflow_dispatch' && inputs.full_server
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libre2-dev clang lld libssl-dev postgresql-client python3
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo build --locked --release -j 2 -p main_main -p initdb
+      - run: |
+          ulimit -s 65520
+          python3 scripts/validation/server_smoke.py --bin-dir target/release --output artifacts/server-smoke.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: server-smoke
+          path: |
+            artifacts/server-smoke.json
+            /tmp/rust-sql-smoke-*/server.log
+            /tmp/rust-sql-smoke-*/initdb.log

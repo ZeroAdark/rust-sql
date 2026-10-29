@@ -1,0 +1,12 @@
+[
+  {
+    "path": "crates/gravity/program/src/cache.rs",
+    "compiled_source_sha256": "11977f467f901d3c76763a5cbf6110eeac35d226b1a979bc3c315ddf17e5e53f",
+    "lf_normalized_sha256": "ad3a38643549285dd0bfae9c9dcdb78e0037b0015bd5736ae01d97c72ea52b70"
+  },
+  {
+    "path": "crates/_support/pgsync/src/lib.rs",
+    "compiled_source_sha256": "5188d8bd8ae41914a98cc7590985f2cce006cc161445ea2fcb54b0a753c18cf7",
+    "lf_normalized_sha256": "fb915f31884d92a11cbcfac4cbc7d5a1276ee6196741ee7a244f2d9436df8b6a"
+  }
+]

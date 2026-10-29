@@ -5,6 +5,9 @@ target-mut/
 *.profraw
 __pycache__/
 
+# Full local expectation diffs are retained as compressed evidence in Git.
+/artifacts/validation/*-regression.diffs
+
 # cargo-mutants working/output directory (transient audit artifacts)
 mutants.out/
 mutants.out.old/

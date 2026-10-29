@@ -1,0 +1,16 @@
+{
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "repeats": 5,
+  "seconds": 10,
+  "durability": "fsync=on, synchronous_commit=on",
+  "server_binaries": {
+    "baseline": {
+      "path": "/home/rustsql/rustsql-baseline/bin/postgres",
+      "sha256": "bd9c8954d1c58ac3c0dcea5035af7cf44fc7c0e4bf8acb243a034132781d35e3"
+    },
+    "candidate": {
+      "path": "/home/rustsql/rustsql-candidate/bin/postgres",
+      "sha256": "b945aae36cfff0c7354259c5598c583262b1e14030079011ebe65191e27d609b"
+    }
+  }
+}
