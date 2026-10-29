@@ -1,0 +1,154 @@
+{
+  "passed": false,
+  "checks": [
+    "group_null_duplicate",
+    "ordered_aggregate",
+    "window_total_order",
+    "window_range_peers",
+    "window_rows_exclusion",
+    "window_groups",
+    "rollup_ordered",
+    "full_join",
+    "null_not_in",
+    "correlated_exists",
+    "lateral_limit",
+    "union_all_duplicates",
+    "json_window_total_order",
+    "numeric_boundary",
+    "error_division",
+    "error_overflow",
+    "generated_0",
+    "generated_1",
+    "generated_2",
+    "generated_3",
+    "generated_4",
+    "generated_5",
+    "generated_6",
+    "generated_7",
+    "generated_8",
+    "generated_9",
+    "generated_10",
+    "generated_11",
+    "generated_12",
+    "generated_13",
+    "generated_14",
+    "generated_15",
+    "generated_16",
+    "generated_17",
+    "generated_18",
+    "generated_19",
+    "generated_20",
+    "generated_21",
+    "generated_22",
+    "generated_23",
+    "generated_24",
+    "generated_25",
+    "generated_26",
+    "generated_27",
+    "generated_28",
+    "generated_29",
+    "generated_30",
+    "generated_31",
+    "generated_32",
+    "generated_33",
+    "generated_34",
+    "generated_35",
+    "generated_36",
+    "generated_37",
+    "generated_38",
+    "generated_39",
+    "generated_40",
+    "generated_41",
+    "generated_42",
+    "generated_43",
+    "generated_44",
+    "generated_45",
+    "generated_46",
+    "generated_47",
+    "generated_48",
+    "generated_49",
+    "generated_50",
+    "generated_51",
+    "generated_52",
+    "generated_53",
+    "generated_54",
+    "generated_55",
+    "generated_56",
+    "generated_57",
+    "generated_58",
+    "generated_59",
+    "generated_60",
+    "generated_61",
+    "generated_62",
+    "generated_63",
+    "no_data_direct_empty",
+    "no_data_prepared_empty",
+    "no_data_volatile_not_evaluated",
+    "serial_balk_aggregate",
+    "native_postgresql_serial_isolation_matches_overlay"
+  ],
+  "failures": [
+    {
+      "name": "no_data_direct_instrumentation",
+      "postgres": [
+        [
+          "ProjectSet",
+          0,
+          0
+        ],
+        [
+          "Result",
+          0,
+          0
+        ]
+      ],
+      "candidate": [
+        [
+          "ProjectSet",
+          null,
+          null
+        ],
+        [
+          "Result",
+          null,
+          null
+        ]
+      ]
+    },
+    {
+      "name": "no_data_prepared_instrumentation",
+      "postgres": [
+        [
+          "ProjectSet",
+          0,
+          0
+        ],
+        [
+          "Result",
+          0,
+          0
+        ]
+      ],
+      "candidate": [
+        [
+          "ProjectSet",
+          null,
+          null
+        ],
+        [
+          "Result",
+          null,
+          null
+        ]
+      ]
+    }
+  ],
+  "clusters": {
+    "postgres": "/home/rustsql/compat/compat-pr1bmruj",
+    "candidate": "/home/rustsql/compat/compat-5ottv45b"
+  },
+  "versions": {
+    "postgres": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+    "candidate": "PostgreSQL 18.6 (pgrust 0.4-beta, build 38634b4) on x86_64-unknown-linux-gnu, 64-bit"
+  }
+}

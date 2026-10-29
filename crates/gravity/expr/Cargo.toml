@@ -71,7 +71,7 @@ types_rel = { path = "../../_support/types/rel" }
 relation_seams = { path = "../../backend/access/common/relation_seams" }
 gravity_backend = { path = "../backend" }
 gravity_wasm = { path = "../backend/wasm" }
-wasmtime = { version = "48", default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmtime.workspace = true
 sequence_seams = { path = "../../backend/commands/sequence_seams" }
 gravity_lint = { path = "../lint" }
 heaptuple = { path = "../../backend/access/common/heaptuple" }

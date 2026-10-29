@@ -13,8 +13,12 @@ The starting point is upstream v0.4-beta, commit `38634b408dea373f3944006dfbf74d
 - Shared program-cache byte accounting no longer scans every entry on each insert. Global entry limits remain respected below the shard count.
 - Worker wake queues use O(1) operations at both ends while preserving the existing fairness order.
 - Regression tests, cache benchmarks, Linux CI, and a disposable-cluster recovery smoke test.
+- Correct zero-row EXPLAIN instrumentation for direct and prepared CTAS with `WITH NO DATA`.
+- Patched zstd/Wasmtime dependencies, a dependency-audit CI gate, native PostgreSQL differential checks, and whole-process crash/backup-restore probes.
 
 The L2 admission budget counts code bytes at filing time, **not** total process memory. Prepared-plan ownership, metadata, and later JIT promotion remain separate. See [measurement limits and results](docs/performance.md).
+
+The [compatibility investigation](docs/compatibility-investigation.md) distinguishes fixed defects, execution-engine differences, and remaining qualification work. Raw PostgreSQL regression expectations are still failing; the fork is not fully PostgreSQL-compatible or production-qualified.
 
 ## Build and validate
 

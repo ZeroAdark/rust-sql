@@ -70,6 +70,11 @@ fn root_id(pstmt: &PlannedStmt<'_>) -> Option<i32> {
 fn gravity_node(qd: &QueryDesc, plan_node_id: i32) -> Option<GravityNodeRows> {
     stack_depth_core::check_stack_depth_or_panic();
     let s = qd.serve.as_ref().filter(|s| s.report.is_some())?;
+    // WITH NO DATA takes NoMovementScanDirection: no node can have run. Report
+    // known zero counts, including the root, instead of unknown instrumentation.
+    if qd.eflags & types_slot::EXEC_FLAG_WITH_NO_DATA != 0 {
+        return Some(GravityNodeRows::Counted { rows: 0.0, loops: 0.0 });
+    }
     if root_id(qd.plannedstmt()) != Some(plan_node_id) {
         match init_ran(qd, plan_node_id) {
             InitRan::Never => return Some(GravityNodeRows::Counted { rows: 0.0, loops: 0.0 }),
@@ -451,11 +456,12 @@ pub(crate) fn query_desc_instrument(h: QueryDescHandle, id: i32) -> Option<Instr
 
 /// An EXPLAIN without ANALYZE under an instrument option (BUFFERS: ExplainOnePlan's INSTRUMENT_BUFFERS): each node's
 /// InstrAlloc'd Instrumentation, never started, whose zero buffer counters the printer shows (a non-text format prints
-/// them). A served desc keeps none (Gravity's EXPLAIN ANALYZE reads its own record).
+/// them). WITH NO DATA also never runs its plan, including under ANALYZE.
 fn explained_instrument(qd: &mut QueryDesc) -> Option<Instrumentation> {
     use types_core::instrument::{INSTRUMENT_BUFFERS, INSTRUMENT_TIMER, INSTRUMENT_WAL};
     let o = qd.instrument_options;
-    (qd.state == crate::admit::entry::State::Explained && o != 0).then(|| Instrumentation { need_timer: o & INSTRUMENT_TIMER != 0, need_bufusage: o & INSTRUMENT_BUFFERS != 0, need_walusage: o & INSTRUMENT_WAL != 0, ..Instrumentation::default() })
+    let never_run = qd.state == crate::admit::entry::State::Explained || qd.eflags & types_slot::EXEC_FLAG_WITH_NO_DATA != 0;
+    (never_run && o != 0).then(|| Instrumentation { need_timer: o & INSTRUMENT_TIMER != 0, need_bufusage: o & INSTRUMENT_BUFFERS != 0, need_walusage: o & INSTRUMENT_WAL != 0, ..Instrumentation::default() })
 }
 
 pub(crate) fn query_desc_gravity_node(h: QueryDescHandle, id: i32) -> Option<GravityNodeRows> {

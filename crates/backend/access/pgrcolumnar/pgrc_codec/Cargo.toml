@@ -21,7 +21,7 @@ pgsync = { path = "../../../../_support/pgsync" }
 # arm refuses the wrapper typed (WrapperUnsupported) at both call sites —
 # parity-honest degradation, never a silent wrong answer.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off
+zstd.workspace = true
 
 [dev-dependencies]
 adt_jsonb_shred = { path = "../../../utils/adt/jsonb_shred", features = ["testgen"] }

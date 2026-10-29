@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import tempfile
 import time
@@ -24,6 +25,7 @@ def main():
     ap.add_argument("--mixed-seconds", type=int, default=0, help="optional mixed probe; requires psycopg 3")
     ap.add_argument("--regression-dir", type=Path, help="built PostgreSQL 18.6 src/test/regress directory")
     ap.add_argument("--isolation-dir", type=Path, help="built PostgreSQL 18.6 src/test/isolation directory")
+    ap.add_argument("--isolation-overlay", type=Path, help="copy documented engine isolation fixtures into an owned input tree")
     ap.add_argument("--reference-bin", type=Path, help="PostgreSQL 18.6 client directory for pg_regress")
     args = ap.parse_args()
     if os.geteuid() == 0:
@@ -144,12 +146,23 @@ def main():
             output.mkdir()
             regdir = directory.resolve()
             database = "isolation_regression" if name == "isolation" else "regression"
-            cmd = [str(regdir / executable), f"--inputdir={regdir}", f"--outputdir={output}",
+            inputs = regdir
+            if name == "isolation" and args.isolation_overlay:
+                inputs = root / "isolation-input"
+                inputs.mkdir()
+                for subdir, suffix in (("specs", ".spec"), ("expected", ".out")):
+                    shutil.copytree(regdir / subdir, inputs / subdir)
+                    for fixture in (args.isolation_overlay / subdir).glob(f"*{suffix}"):
+                        shutil.copyfile(fixture, inputs / subdir / fixture.name)
+                (inputs / schedule).write_text((regdir / schedule).read_text() + "\n" +
+                                               (args.isolation_overlay / "schedule.extra").read_text())
+            cmd = [str(regdir / executable), f"--inputdir={inputs}", f"--outputdir={output}",
                    f"--bindir={args.reference_bin.resolve()}", f"--dlpath={regdir}", f"--host={sock}",
-                   "--port=55439", "--user=rustsql", f"--dbname={database}", f"--schedule={regdir / schedule}"]
+                   "--port=55439", "--user=rustsql", f"--dbname={database}", f"--schedule={inputs / schedule}"]
             with (root / f"{name}.log").open("w") as reglog:
                 result = subprocess.run(cmd, cwd=regdir, env=env, stdout=reglog, stderr=reglog, timeout=900)
-            report[name] = {"returncode": result.returncode, "directory": str(output)}
+            report[name] = {"returncode": result.returncode, "directory": str(output),
+                            "profile": "engine-overlay" if inputs != regdir else "postgresql-raw"}
             suite_failed |= result.returncode != 0
         if suite_failed:
             raise AssertionError(f"PostgreSQL suites failed: see logs in {root}")

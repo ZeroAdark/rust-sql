@@ -163,4 +163,4 @@ transam_seams = { path = "../../backend/access/transam/transam_seams" }
 
 # zstd-sys builds C, which a wasm32 check has no compiler for (the wasm gate checks every workspace member).
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off
+zstd.workspace = true

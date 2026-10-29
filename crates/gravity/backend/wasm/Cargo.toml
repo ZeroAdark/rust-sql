@@ -44,7 +44,7 @@ mbutils = { path = "../../../backend/utils/mb/mbutils" }
 regex_core = { path = "../../../backend/regex/regex_core" }
 adt_regexp = { path = "../../../backend/utils/adt/regexp" }
 gravity_dict = { path = "../../dict" }
-wasmtime = { version = "48", default-features = false, features = ["cranelift", "runtime", "std"] }
+wasmtime.workspace = true
 
 # The integration tests (tests/*.rs). The files that can share one process are modules of ONE test binary,
 # gravity_wasm_suite (tests/gravity_wasm_suite.rs: `#[path = "<stem>.rs"]` and `mod t_<stem>;` per file); ct runs it

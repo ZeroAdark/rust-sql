@@ -22,29 +22,77 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: cargo test --locked -j 2 -p gravity_program -p pgsync
-      - run: python3 -m py_compile scripts/validation/server_smoke.py scripts/validation/mixed_workload.py scripts/validation/compare_mixed.py
+      - run: python3 -m py_compile scripts/validation/*.py
       - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cache-pressure
           path: cache-pressure.csv
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo install cargo-audit --version 0.22.2 --locked -j 2
+      - run: cargo audit --deny warnings --json > dependency-audit.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dependency-audit
+          path: dependency-audit.json
   server:
     if: github.event_name == 'workflow_dispatch' && inputs.full_server
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libre2-dev clang lld libssl-dev postgresql-client python3
+      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libre2-dev clang lld libssl-dev libicu-dev postgresql-client python3-psycopg bison flex zlib1g-dev locales
+      - run: sudo localedef -i en_US -f UTF-8 en_US.UTF-8
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: cargo build --locked --release -j 2 -p main_main -p initdb
+      - run: cargo test --locked --release -j 2 -p compression -p basebackup_compress -p pgrc_codec -p xlogreader -p xloginsert -p parquet_read --lib
+      - run: cargo test --locked --release -j 2 -p gravity_wasm --test gravity_wasm_suite
+      - name: Build the pinned PostgreSQL reference separately
+        run: |
+          cp -a crates/postgres-18.6-reference "$RUNNER_TEMP/postgres-reference"
+          cd "$RUNNER_TEMP/postgres-reference"
+          ./configure --prefix="$RUNNER_TEMP/postgres18" --without-readline
+          make -j 2
+          make install
+          make -C src/test/regress pg_regress
+          make -C src/test/isolation all
+      - name: Differential SQL and whole-process crash/restore checks
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/compatibility_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" --output artifacts/compatibility.json
+          python3 scripts/validation/recovery_probe.py --candidate target/release \
+            --reference-clients "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/recovery.json --cycles 10
       - run: |
           ulimit -s 65520
-          python3 scripts/validation/server_smoke.py --bin-dir target/release --output artifacts/server-smoke.json
+          python3 scripts/validation/server_smoke.py --bin-dir target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/server-smoke.json \
+            --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --isolation-overlay regress/isolation-overlay
+      # Deliberately remains red while raw PostgreSQL output differs; never silently normalize it.
+      - name: Strict PostgreSQL regression expectations
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/server_smoke.py --bin-dir target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/postgres-raw.json \
+            --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: server-smoke
           path: |
-            artifacts/server-smoke.json
-            /tmp/rust-sql-smoke-*/server.log
-            /tmp/rust-sql-smoke-*/initdb.log
+            artifacts/*.json
+            ${{ runner.temp }}/rustsql-checks/*/server.log
+            ${{ runner.temp }}/rustsql-checks/*/initdb.log
+            ${{ runner.temp }}/rustsql-checks/*/regression/regression.*
+            ${{ runner.temp }}/rustsql-checks/*/isolation/regression.*
+            ${{ runner.temp }}/rustsql-checks/*/isolation.log
