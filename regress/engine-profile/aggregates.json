@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "reason": "Six truthful serial/decorrelated plans. The deliberately NULL-combining fixture is separately checked against its serial input sum, source/occurrence, setup/data hashes and serial plan; all ordinary SQL values stay strict.",
+  "source_sha256": "48fb78e1ee6539a8e6cb3392d0d740f1f6199d18af3321b6781c1415f6140772",
+  "expected_sha256": "a713790e44d75a57599fda32b5ee5465934e8ca5d82ea04b86ac1df18544df6e",
+  "plans": [
+    {
+      "sql_sha256": "eff4afbb554383ec95a6ef00e1e91c9c4a056d1ce7069a2f352b51e0b624089f",
+      "occurrence": 1,
+      "sql_line": 448,
+      "kind": "text_plan",
+      "before_sha256": "8c983e48e35e7d70768d76c91f55135e465bfa324b61a90e9f54c47204981de8",
+      "after": "                    QUERY PLAN                     \n---------------------------------------------------\n Hash Left Join\n   Hash Cond: (t0.f1 = gravity_decorrelated.k1)\n   ->  Seq Scan on int4_tbl t0\n   ->  Hash\n         ->  Subquery Scan on gravity_decorrelated\n               ->  HashAggregate\n                     Group Key: t1.f1\n                     ->  Seq Scan on int4_tbl t1\n(8 rows)\n"
+    },
+    {
+      "sql_sha256": "7972e0adc508c1f72bd026d691eea507d131e57fb1f92e7b24bb4115f2a04a9f",
+      "occurrence": 1,
+      "sql_line": 925,
+      "kind": "text_plan",
+      "before_sha256": "41c3f5829166e8f3deb7f2f4ed5aa4ad33d6fdd3c8e0129be679d62bab6ee4ff",
+      "after": "                                                              QUERY PLAN                                                              \n--------------------------------------------------------------------------------------------------------------------------------------\n GroupAggregate\n   Group Key: pagg_test.y\n   ->  Sort\n         Sort Key: pagg_test.y, (((unnest(regexp_split_to_array((string_agg((pagg_test.x)::text, ','::text)), ','::text))))::integer)\n         ->  Result\n               ->  ProjectSet\n                     ->  HashAggregate\n                           Group Key: pagg_test.y\n                           ->  Seq Scan on pagg_test\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "44d062762c1488a3e5e80a44325d59e152af3ee3abe50f933380ffcabf63b70d",
+      "occurrence": 1,
+      "sql_line": 933,
+      "kind": "text_plan",
+      "before_sha256": "f6da8a9cf1f6e95b9d0e066c7fb90e7638889dfcc6a15cd253f758564c5dcf0a",
+      "after": "         QUERY PLAN          \n-----------------------------\n Aggregate\n   ->  Seq Scan on pagg_test\n(2 rows)\n"
+    },
+    {
+      "sql_sha256": "39daac3715f1323d0adb681b7ec9e2359c8c6f99d409c259a4dcce3a4aefa8e6",
+      "occurrence": 1,
+      "sql_line": 1456,
+      "kind": "text_plan",
+      "before_sha256": "916416565adb8c8c608026d40bd105e10c969a4fc098196e93344c3650208e64",
+      "after": "                     QUERY PLAN                     \n----------------------------------------------------\n Aggregate\n   ->  Index Only Scan using tenk1_hundred on tenk1\n(2 rows)\n"
+    },
+    {
+      "sql_sha256": "c526c1ac2a1d01f2700861d113f99915848bfbdd2e9d2d311a3ab5f0094dcaaa",
+      "occurrence": 1,
+      "sql_line": 1513,
+      "kind": "text_plan",
+      "before_sha256": "28aaf519c476a99f066aa2c8863e1d4982bebe8ef937bc258820efa729e84ce5",
+      "after": "                                                                    QUERY PLAN                                                                     \n---------------------------------------------------------------------------------------------------------------------------------------------------\n Aggregate\n   Output: variance(tenk1.unique1), sum((tenk1.unique1)::bigint), regr_count((tenk1.unique1)::double precision, (tenk1.unique1)::double precision)\n   ->  Append\n         ->  Seq Scan on public.tenk1\n               Output: tenk1.unique1\n         ->  Seq Scan on public.tenk1 tenk1_1\n               Output: tenk1_1.unique1\n         ->  Seq Scan on public.tenk1 tenk1_2\n               Output: tenk1_2.unique1\n         ->  Seq Scan on public.tenk1 tenk1_3\n               Output: tenk1_3.unique1\n(11 rows)\n"
+    },
+    {
+      "sql_sha256": "3014a069bfa563c66064738bf8ed7032642a7ca16f04140cd62f9101e03a8ca4",
+      "occurrence": 1,
+      "sql_line": 1528,
+      "kind": "text_plan",
+      "before_sha256": "389c636194acc5970a596fd9b105dc09e7ae8a012dbd688be961ce9a253c3d0f",
+      "after": "                                 QUERY PLAN                                 \n----------------------------------------------------------------------------\n Aggregate\n   Output: variance((tenk1.unique1)::bigint), avg((tenk1.unique1)::numeric)\n   ->  Append\n         ->  Seq Scan on public.tenk1\n               Output: tenk1.unique1\n         ->  Seq Scan on public.tenk1 tenk1_1\n               Output: tenk1_1.unique1\n         ->  Seq Scan on public.tenk1 tenk1_2\n               Output: tenk1_2.unique1\n         ->  Seq Scan on public.tenk1 tenk1_3\n               Output: tenk1_3.unique1\n(11 rows)\n"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # Reviewed diagnostic expectations and SQL choice proofs
 
-These seventeen profiles change 123 complete diagnostic tables under the owner's
-SQL/protocol compatibility contract: 75 direct EXPLAIN tables, 29 plan-wrapper
+These eighteen profiles change 129 complete diagnostic tables under the owner's
+SQL/protocol compatibility contract: 81 direct EXPLAIN tables, 29 plan-wrapper
 results, 18 projections of unavailable hash metrics and one allocator inventory.
 They do not replace vendor SQL or expected files. Measured root rows/loops cannot
 change or disappear where the upstream helper retains them. Existing upstream
@@ -26,6 +26,7 @@ numeric placeholders are checked as formatting, never used as measurement eviden
 | explain | 4 | One upstream-filtered JSON plan and three window-plan wrappers |
 | partition_prune | 17 | Three direct plans, twelve parallel wrappers and two UPDATE wrappers |
 | join_hash | 33 | Fifteen direct plans and eighteen NULL projections of unavailable batch measurements |
+| aggregates | 6 | Serial aggregation and decorrelated plans; the inconsistent combiner fixture has a separate result witness |
 
 Each profile binds the whole SQL source, original expectation, statement occurrence
 and original plan table by SHA-256. Replacements are exact aligned plan tables;
@@ -71,6 +72,17 @@ PostgreSQL also labels sorted UNION ALL columns using the first arm's expression
 (even a constant); the captured plans use that convention, while actual values
 and ordering remain checked.
 
+The separate [aggregate strategy policy](policy/aggregate-strategy.json) covers
+only the second `balk(hundred)` call in the pinned fixture. Its deliberately NULL
+combiner does not satisfy PostgreSQL's partial-aggregation equivalence requirement.
+`aggregate_strategy.py` requires a serial Aggregate plan and derives the exact
+sum from the pinned tenk setup/data. It rejects wrong sums and serial NULLs,
+including the NULL that happens to match the original parallel native output.
+The first NULL-transition call, errors and all other values remain strict.
+Seventeen live controls per engine cover serial/partial execution, NULL/empty
+input, duplicates, groups and a valid sum combiner. Real native workers and
+measured root rows/loops are required.
+
 `scripts/validation/engine_regression_profile.py --record` is an explicit authoring
 operation requiring a reason and a new file. It refuses to record a case if any
 other difference remains after permitted row permutations. Review the complete
@@ -80,7 +92,7 @@ x86-64 as well as the two earlier runs. The full
 auditor first requires every native result to match a pinned PostgreSQL fixture;
 whole-file upstream alternatives cover optional feature/platform branches.
 
-The raw suite remains separate. The reviewed profile accepts 227/231 cases, with
-four unresolved cases. This is not a complete compatibility or production claim.
+The raw suite remains separate. The reviewed profile accepts 228/231 cases, with
+three unresolved cases. This is not a complete compatibility or production claim.
 See [the investigation](../../docs/compatibility-investigation.md) and
-[retained evidence](../../artifacts/validation/filtered-diagnostics-2026-10-30/README.md).
+[retained evidence](../../artifacts/validation/aggregate-strategy-2026-10-30/README.md).

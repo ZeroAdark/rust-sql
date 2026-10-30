@@ -3,6 +3,8 @@
 This is not a general geometric/JSON normalizer. Unknown source or SQL hashes,
 finite-distance reordering, changed values, duplicate loss and error text remain
 strict. Each proof uses expected O(rows) work and at most O(rows) storage.
+The separate aggregate-strategy witness handles one deliberately inconsistent
+regression helper; it never grants an exception to ordinary aggregate results.
 """
 from collections import Counter
 from functools import lru_cache
@@ -11,6 +13,7 @@ import json
 from pathlib import Path
 
 from compare_regression import columns, find_anchor, physical_lines, statements, table
+from aggregate_strategy import compare_aggregate_strategy
 
 
 POLICY = Path(__file__).resolve().parents[2] / "regress/engine-profile/policy/choices.json"
@@ -127,13 +130,14 @@ def eol(line):
 
 
 def compare_choices(source, expected, actual):
+    actual, strategy_proofs = compare_aggregate_strategy(source, expected, actual)
     entry = policy().get(digest(source))
     if entry is None or entry["expected_sha256"] != digest(expected):
-        return actual, []
+        return actual, strategy_proofs
     e, a = physical_lines(expected, keepends=True), physical_lines(actual, keepends=True)
     el, al = physical_lines(expected), physical_lines(actual)
     ep = ap = 0
-    proofs = []
+    proofs = strategy_proofs
     for line, anchor, sql in statements(source):
         ei, ai = find_anchor(el, anchor, ep), find_anchor(al, anchor, ap)
         if ei is None or ai is None:
