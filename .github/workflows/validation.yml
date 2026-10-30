@@ -74,6 +74,8 @@ jobs:
             --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" --output artifacts/compatibility.json
           python3 scripts/validation/explain_contract.py --candidate target/release \
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/explain-contract.json
+          python3 scripts/validation/admission_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/admission.json
           python3 scripts/validation/choice_contract.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/choice-contract.json

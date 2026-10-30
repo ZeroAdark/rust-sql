@@ -824,16 +824,7 @@ pub fn exec_simple_query<'mcx>(mcx: Mcx<'mcx>, query_string: &'mcx str) -> PgRes
     // snapshot is taken, or any lock acquired; the guard's drop releases
     // on every exit path (Ok, Err unwind, panic).
     let _admission = crate::admission::acquire_for_statement(|| {
-        let bytes = query_string.as_bytes();
-        let mentions = bytes.windows(8).any(|w| w.eq_ignore_ascii_case(b"prepared"));
-        mentions
-            && pg_parse_query(mcx, query_string).is_ok_and(|list| {
-                list.iter().any(|raw| {
-                    raw.stmt.is_some_and(|stmt| {
-                        crate::admission::finishes_prepared(utility_seams::create_command_tag::call(stmt))
-                    })
-                })
-            })
+        crate::admission::finishes_prepared_query(mcx, query_string)
     })?;
 
     if save_log_statement_stats {
@@ -1271,9 +1262,12 @@ fn enable_statement_timeout() -> PgResult<()> {
 pub(crate) fn arm_statement_timeout() -> PgResult<()> {
     let statement_timeout = lmgr_proc::globals::StatementTimeout();
     let transaction_timeout = lmgr_proc::globals::TransactionTimeout();
-    // An earlier-or-equal TRANSACTION_TIMEOUT subsumes the statement timer.
+    // An earlier-or-equal active TRANSACTION_TIMEOUT subsumes the statement
+    // timer. Admission can wait before a transaction starts: a configured
+    // but unarmed transaction timer cannot bound that wait.
     if statement_timeout > 0
-        && (statement_timeout < transaction_timeout || transaction_timeout == 0)
+        && (statement_timeout < transaction_timeout || transaction_timeout == 0
+            || !timeout_seams::get_timeout_active::call(timeout_seams::TRANSACTION_TIMEOUT))
     {
         if !timeout_seams::get_timeout_active::call(timeout_seams::STATEMENT_TIMEOUT) {
             timeout_seams::enable_timeout_after::call(

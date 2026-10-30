@@ -1,0 +1,35 @@
+{
+  "production_qualified": false,
+  "correctness_passed": true,
+  "binary_sha256": "e7d3f26e5f0acfb3de5bd9b0971a4168cbfca2d3a25407c64658721c9e4ac20a",
+  "admission_checks": 52,
+  "session_unit_tests": 79,
+  "validation_unit_tests": 126,
+  "differential_checks": 87,
+  "smoke_checks": 12,
+  "reviewed_regression": {
+    "accepted": 231,
+    "total": 231,
+    "passed": true
+  },
+  "raw_regression": {
+    "matched": 203,
+    "total": 231,
+    "passed": false
+  },
+  "isolation_cases": 510,
+  "crash_recovery_cycles": 10,
+  "logical_restore": true,
+  "calibration_trials": 20,
+  "measured_statements": 912000,
+  "performance_gates": {
+    "four": {
+      "throughput": true,
+      "query_p99": false
+    },
+    "six": {
+      "throughput": true,
+      "query_p99": true
+    }
+  }
+}

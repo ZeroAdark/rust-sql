@@ -675,6 +675,7 @@ fn dispatch_message<'mcx>(
             backend_status_seams::pgstat_report_activity::call(BackendState::STATE_FASTPATH, None);
             ps_status_seams::set_ps_display::call("<FASTPATH>");
 
+            let _admission = crate::admission::acquire_for_statement(|| false)?;
             simple_query::start_xact_command()?;
 
             let call = fastpath::HandleFunctionRequest(mcx, input_message)?;

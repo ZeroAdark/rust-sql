@@ -23,7 +23,7 @@ def run_trial(args, scope, binary, memory, label, repetition):
     try:
         started = time.monotonic()
         with Cluster(binary, args.work_dir, launcher=launcher,
-                     settings=['autovacuum=off', 'max_active_queries=4', 'work_mem=16MB']) as cluster:
+                     settings=['autovacuum=off', f'max_active_queries={args.max_active_queries}', 'work_mem=16MB']) as cluster:
             report.update(cluster=str(cluster.root), version=cluster.version)
             assert cluster.process.pid in {int(pid) for pid in (group / 'cgroup.procs').read_text().split()}
             assert os.sched_getaffinity(cluster.process.pid) == scope.server_cpus
@@ -31,7 +31,7 @@ def run_trial(args, scope, binary, memory, label, repetition):
                 setup(connection, args.rows, args.clients)
                 report['settings'] = connection.execute("SELECT name,setting,unit FROM pg_settings WHERE name IN ('fsync','synchronous_commit','max_active_queries','work_mem','shared_buffers','max_connections','connection_queue_timeout','connection_queue_size') ORDER BY name").fetchall()
                 settings = {name: setting for name, setting, _ in report['settings']}
-                assert settings['fsync'] == 'on' and settings['synchronous_commit'] == 'on' and settings['max_active_queries'] == '4'
+                assert settings['fsync'] == 'on' and settings['synchronous_commit'] == 'on' and settings['max_active_queries'] == str(args.max_active_queries)
                 report['plans'] = {}
                 for kind in ('aggregate', 'range', 'join'):
                     query = SQL[kind]
@@ -74,13 +74,14 @@ def main():
     parser.add_argument('--client-cpus', type=int, nargs='+', default=[8, 10])
     parser.add_argument('--rows', type=int, default=1000000)
     parser.add_argument('--clients', type=int, default=6)
+    parser.add_argument('--max-active-queries', type=int, default=4)
     parser.add_argument('--bundles', type=int, default=400)
     parser.add_argument('--warmup', type=int, default=50)
     parser.add_argument('--repeats', type=int, default=5)
     args = parser.parse_args()
     if not (4096 <= args.rows <= 10000000 and 1 <= args.clients <= 16 and 1 <= args.bundles <= 2000
-            and 1 <= args.warmup <= 100 and 1 <= args.repeats <= 10):
-        parser.error('rows/clients/bundles/warmup/repeats exceed bounded experiment limits')
+            and 1 <= args.warmup <= 100 and 1 <= args.repeats <= 10 and 1 <= args.max_active_queries <= 16):
+        parser.error('rows/clients/admission/bundles/warmup/repeats exceed bounded experiment limits')
     if len(args.memory_mib) != len(set(args.memory_mib)) or any(not 512 <= m <= 8192 for m in args.memory_mib):
         parser.error('distinct memory limits between 512 and 8192 MiB required')
     args.output_dir.mkdir(parents=True, exist_ok=False)
@@ -88,6 +89,7 @@ def main():
     metadata = {'platform': platform.platform(), 'python': platform.python_version(),
                 'server_cpus': args.server_cpus, 'client_cpus': args.client_cpus,
                 'rows': args.rows, 'clients': args.clients, 'bundles': args.bundles,
+                'max_active_queries': args.max_active_queries,
                 'warmup': args.warmup, 'repeats': args.repeats, 'memory_mib': args.memory_mib,
                 'statements_per_bundle': PER_BUNDLE, 'binaries': {}, 'source_lf_sha256': {},
                 'cpu_model': next(line.split(':', 1)[1].strip() for line in Path('/proc/cpuinfo').read_text().splitlines() if line.startswith('model name'))}

@@ -2,6 +2,21 @@
 
 CPU savings are the primary goal. Bounded memory increases are acceptable when the CPU benefit is measured; correctness and latency remain release gates.
 
+## Transaction admission, 2026-10-30
+
+The [admission fixes](transaction-admission.md) enforce a limit that extended-protocol queries previously bypassed. The earlier fixed-work runs configured `max_active_queries=4`, but that setting did not constrain those queries. Both sides of the earlier validity-forwarding comparison shared the defect, so its CPU comparison remains useful; it does not demonstrate working admission.
+
+Two separate 4 GiB calibrations compare the preceding optimized binary `26ba69060488b50cc165b9a450c397eab524c1240870012d7c775e12f4540f77` with the corrected binary `e7d3f26e5f0acfb3de5bd9b0971a4168cbfca2d3a25407c64658721c9e4ac20a`. Each uses five interleaved pairs, six clients, one million fact rows, 400 measured bundles per client, 50 warmup bundles, four server CPUs and separate client CPUs. Both binaries receive the same configured limit in each experiment. Every result and all committed updates are checked, including after restart.
+
+| Configured transaction limit | CPU us/bundle, previous / corrected | CPU change | Throughput change | Point-read p99 change | Largest query p99 increase | Peak PSS change |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4 | 15,552.73 / 15,529.13 | -0.15% | -4.28% | +14.94% | +14.94% | +9.22% |
+| 6 | 15,572.39 / 15,544.83 | -0.18% | +0.19% | +0.63% | +3.07% | -2.52% |
+
+These are changes in medians, not new demonstrated CPU savings: paired CPU changes straddle zero. Enforcing four slots increases point-read p99 from 4.25 to 4.89 ms, while analytical p99 falls 15–20%; this configuration **fails** the provisional per-query 5% latency gate. With six slots, matching the six clients' maximum concurrency, both throughput and every query p99 remain inside that gate. This supports using six as a starting point for this workload only; it is not a universal production setting or a claim about saturation beyond six clients. The server default remains zero (disabled).
+
+All 20 trials pass correctness and restart checks: 912,000 measured statements and 192,000 measured committed updates, plus warmup. There are no OOM, swap, memory-limit or CPU-throttling events. The failed four-slot latency result is retained alongside the six-slot result in the [evidence package](../artifacts/validation/transaction-admission-2026-10-30/README.md). These are WSL development measurements at one memory cap; a new complete memory matrix and Linux-server qualification remain open. The benchmark now accepts `--max-active-queries` (default 4), records the value, and rejects individual trials that used different settings.
+
 ## Aggregate validity forwarding, 2026-10-30
 
 Forwarding recently loaded/stored aggregate validity bytes removes a measured

@@ -218,6 +218,11 @@ pub fn exec_parse_message<'mcx>(
             .finish(loc(1417, "exec_parse_message"))?;
     }
 
+    // Parse can take relation locks during analysis. Admit before starting
+    // its transaction, then retain the slot across subsequent messages.
+    let _admission = crate::admission::acquire_for_statement(|| {
+        crate::admission::finishes_prepared_query(mcx, query_string)
+    })?;
     start_xact_command()?;
 
     /*
@@ -592,6 +597,11 @@ pub fn exec_bind_message<'mcx>(
         ResetUsage();
     }
 
+    // A cached prepared statement may arrive at Bind without a Parse in
+    // this transaction. Revalidation and planning below can acquire locks.
+    let _admission = crate::admission::acquire_for_statement(|| {
+        crate::admission::finishes_prepared(plancache::CachedPlanCommandTag(psrc))
+    })?;
     start_xact_command()?;
     crate::stmt_trace::probe("b.xact");
 
@@ -1070,12 +1080,9 @@ pub fn exec_execute_message<'mcx>(
         Some(source_text),
     );
 
-    // D1 max_active_queries gate (docs/design/connection-scaling.md §D1):
-    // the extended-protocol execution entry, gated exactly like
-    // exec_simple_query — after activity reporting (waiters visible in
-    // pg_stat_activity as active on MaxActiveQueries), before the
-    // transaction/snapshot/locks (everything above is session-local portal
-    // bookkeeping); the guard's drop releases on every exit path.
+    // Parse/Bind normally already hold the transaction's admission slot.
+    // Keep an entry check for a retained portal executed in a new transaction.
+    // The live-transaction safety valve must never park a lock holder.
     let _admission = crate::admission::acquire_for_statement(|| {
         crate::admission::finishes_prepared(portal.borrow().commandTag)
     })?;
@@ -1299,9 +1306,12 @@ fn IsTransactionExitStmtList(pstmts: &[PlannedStmt<'_>]) -> bool {
 }
 
 pub fn exec_describe_statement_message<'mcx>(mcx: Mcx<'mcx>, stmt_name: &str) -> PgResult<()> {
-    start_xact_command()?;
-
     let psrc = lookup_plansource(stmt_name)?;
+    // Describe can revalidate a cached statement and acquire relation locks.
+    let _admission = crate::admission::acquire_for_statement(|| {
+        crate::admission::finishes_prepared(plancache::CachedPlanCommandTag(psrc))
+    })?;
+    start_xact_command()?;
 
     debug_assert!(plancache::CachedPlanFixedResult(psrc));
 
@@ -1334,8 +1344,6 @@ pub fn exec_describe_statement_message<'mcx>(mcx: Mcx<'mcx>, stmt_name: &str) ->
 }
 
 pub fn exec_describe_portal_message<'mcx>(mcx: Mcx<'mcx>, portal_name: &str) -> PgResult<()> {
-    start_xact_command()?;
-
     let Some(portal) = portalmem::GetPortalByName(Some(portal_name)) else {
         return Err(ereport(ERROR)
             .errcode(ERRCODE_UNDEFINED_CURSOR)
@@ -1344,6 +1352,11 @@ pub fn exec_describe_portal_message<'mcx>(mcx: Mcx<'mcx>, portal_name: &str) -> 
             .with_funcname("exec_describe_portal_message")
             .into());
     };
+
+    let _admission = crate::admission::acquire_for_statement(|| {
+        crate::admission::finishes_prepared(portal.borrow().commandTag)
+    })?;
+    start_xact_command()?;
 
     if xact::IsAbortedTransactionBlockState() && portal.borrow().tupDesc.is_some() {
         return Err(aborted_xact_error("exec_describe_portal_message"));

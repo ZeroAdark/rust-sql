@@ -40,8 +40,12 @@ def validate_trial(report, metadata, identity):
                        'memory.max': str(memory * 1024 ** 2), 'memory.swap.max': '0', 'pids.max': '1024'}
     require(report['limits'] == expected_limits, 'resource limits differ')
     settings = {name: setting for name, setting, _ in report['settings']}
+    # Older fixed-work captures used a hard-coded limit of four. New captures
+    # record the chosen limit and must match it in every individual trial.
+    active_limit = metadata.get('max_active_queries', 4)
+    require(type(active_limit) is int and 1 <= active_limit <= 16, 'invalid admission limit')
     require(settings['fsync'] == 'on' and settings['synchronous_commit'] == 'on'
-            and settings['max_active_queries'] == '4' and settings['work_mem'] == '16384', 'durability or workload settings differ')
+            and settings['max_active_queries'] == str(active_limit) and settings['work_mem'] == '16384', 'durability or workload settings differ')
     measurement = report['measurement']
     require(measurement['passed'] is True, 'failed measurement')
     for recorded, argument in (('clients', 'clients'), ('bundles_per_client', 'bundles'),

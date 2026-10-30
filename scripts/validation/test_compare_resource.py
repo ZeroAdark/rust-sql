@@ -125,6 +125,27 @@ class ResourceEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'summary differs'):
             analyze(self.root, self.sources)
 
+    def test_admission_setting_must_match_recorded_experiment(self):
+        self.metadata['max_active_queries'] = 6
+        self.write('metadata.json', self.metadata)
+        with self.assertRaisesRegex(ValueError, 'workload settings differ'):
+            analyze(self.root, self.sources)
+        for item in self.summary['trials']:
+            report = json.loads((self.root / item['file']).read_text())
+            for setting in report['settings']:
+                if setting[0] == 'max_active_queries':
+                    setting[1] = '6'
+            self.write(item['file'], report)
+        self.assertTrue(analyze(self.root, self.sources)['evidence_valid'])
+
+    def test_invalid_admission_limits_fail_closed(self):
+        for limit in (0, -1, 17, True, '6', None):
+            with self.subTest(limit=limit):
+                self.metadata['max_active_queries'] = limit
+                self.write('metadata.json', self.metadata)
+                with self.assertRaisesRegex(ValueError, 'invalid admission limit'):
+                    analyze(self.root, self.sources)
+
     def test_query_specific_tail_regression_is_reported(self):
         for repetition in range(1, 6):
             name = f'candidate-1024-{repetition}.json'
