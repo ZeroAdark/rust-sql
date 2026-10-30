@@ -1,4 +1,4 @@
-"""Prove four pinned SQL choices directly against their captured result tables.
+"""Prove pinned SQL choices directly against their captured result tables.
 
 This is not a general geometric/JSON normalizer. Unknown source or SQL hashes,
 finite-distance reordering, changed values, duplicate loss and error text remain
@@ -40,6 +40,16 @@ def integer(text):
 
 
 def peer_key(kind, cells, row):
+    if kind == "grouping_coalesce_sum":
+        # These two projected int4 columns are the complete ORDER BY input.
+        # NULL is displayed as an empty cell; no rounded numeric is involved.
+        values = [integer(value) if value else 0 for value in cells[:2]]
+        if any(not -(2 ** 31) <= value < 2 ** 31 for value in values):
+            raise ValueError("non-int4 grouping key")
+        total = sum(values)
+        if not -(2 ** 31) <= total < 2 ** 31:
+            raise ValueError("overflowing grouping sort expression")
+        return ("integer-sum", total)
     if kind == "infinite_point_distance" and cells[0] in INFINITE_POINTS:
         # Both distances from the fixed finite point (0,1) are exactly Infinity.
         return ("infinity",)
@@ -101,7 +111,7 @@ def prove(kind, expected, actual, spans):
         return False
     cell = lambda row: [row[a:b].strip() for a, b in spans]
     try:
-        if kind in {"infinite_point_distance", "circle_special_distance"}:
+        if kind in {"infinite_point_distance", "circle_special_distance", "grouping_coalesce_sum"}:
             return same_peer_groups(kind, expected, actual, cell)
         if kind == "srf_distinct_representative":
             return valid_representatives(expected, cell) and valid_representatives(actual, cell)

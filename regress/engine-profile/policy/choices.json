@@ -61,6 +61,25 @@
           "sql": "SELECT\n\tbar, JSON_ARRAYAGG(bar) FILTER (WHERE bar > 2) OVER (PARTITION BY foo.bar % 2)\nFROM\n\t(VALUES (NULL), (3), (1), (NULL), (NULL), (5), (2), (4), (NULL), (5), (4)) foo(bar);"
         }
       }
+    },
+    "f830785bc7ae465d2ee471cad2fd7ab099924e95e3debac1e3664c52d26e4aa5": {
+      "case": "groupingsets",
+      "expected_sha256": "c51b12145ecf9185e5d0e8416864a9adcecc53bcddc6a27457723a30302c29ef",
+      "statements": {
+        "0dc2145565e38c82aa7bcd77ec9875c8ba89a1c4a98311e089d2a9105b62dc43": {
+          "kind": "grouping_coalesce_sum",
+          "sql_line": 65,
+          "columns": [
+            "a",
+            "b",
+            "grouping",
+            "sum",
+            "count",
+            "max"
+          ],
+          "sql": "select a, b, grouping(a,b), sum(v), count(*), max(v)\n  from gstest1 group by rollup (a,b) order by coalesce(a,0)+coalesce(b,0);"
+        }
+      }
     }
   }
 }

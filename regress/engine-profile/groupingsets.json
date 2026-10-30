@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "reason": "Reviewed grouping-set union alternatives; typed rows remain strict except a separately proven permutation among equal int4 coalesce-sum keys. Append expression labels follow native first-arm deparsing.",
+  "source_sha256": "f830785bc7ae465d2ee471cad2fd7ab099924e95e3debac1e3664c52d26e4aa5",
+  "expected_sha256": "c51b12145ecf9185e5d0e8416864a9adcecc53bcddc6a27457723a30302c29ef",
+  "plans": [
+    {
+      "sql_sha256": "9226175dd738784805f17b7d55e0daaf956e1989e120a7be2ac7cd4cdc7c338f",
+      "occurrence": 1,
+      "sql_line": 233,
+      "kind": "text_plan",
+      "before_sha256": "ecace2bae84c81c12da6a378b8b0689e439115c3e7b6df6fb628c5f5936f095e",
+      "after": "                 QUERY PLAN                 \n--------------------------------------------\n Append\n   ->  GroupAggregate\n         Output: 1, NULL::bigint, sum(q2)\n         ->  Result\n               Output: q2\n               One-Time Filter: false\n   ->  GroupAggregate\n         Output: NULL::integer, q1, sum(q2)\n         Group Key: q1\n         ->  Sort\n               Output: q1, q2\n               Sort Key: q1\n               ->  Result\n                     Output: q1, q2\n                     One-Time Filter: false\n(15 rows)\n"
+    },
+    {
+      "sql_sha256": "2a75531dd2597f5cd51dbf8157f0eb52dc129cb5d63266f64e111362e5b243b9",
+      "occurrence": 1,
+      "sql_line": 341,
+      "kind": "text_plan",
+      "before_sha256": "f89edbf882273bd0b75ced02667b75de39dcc0f5461dd7327b80a9e4219608b2",
+      "after": "                    QUERY PLAN                     \n---------------------------------------------------\n Append\n   ->  GroupAggregate\n         Group Key: a\n         ->  Sort\n               Sort Key: a\n               ->  Result\n                     One-Time Filter: false\n   ->  GroupAggregate\n         Group Key: gstest2.a, gstest2.b\n         ->  Sort\n               Sort Key: gstest2.a, gstest2.b\n               ->  Seq Scan on gstest2\n                     Filter: ((a > 1) AND (b > 1))\n(13 rows)\n"
+    },
+    {
+      "sql_sha256": "3667618fbac9ef136a4d0878077abfd7af7d019cccb5645df2bf74eb83837830",
+      "occurrence": 1,
+      "sql_line": 676,
+      "kind": "text_plan",
+      "before_sha256": "b41d0dfc2188ed87a47c2551510ba2e49f6af02da9eb956bd88c7bcf2ce1b6e8",
+      "after": "                               QUERY PLAN                                \n-------------------------------------------------------------------------\n Sort\n   Output: (1), (NULL::integer), (NULL::integer), t1.v\n   Sort Key: (NULL::integer) NULLS FIRST\n   ->  Append\n         ->  HashAggregate\n               Output: 1, NULL::integer, NULL::integer, t1.v\n               Group Key: t1.v\n               ->  Seq Scan on pg_temp.gstest5 t1\n                     Output: t1.id, t1.v\n         ->  GroupAggregate\n               Output: 0, ((SubPlan 1)), ((SubPlan 1)), NULL::integer\n               Group Key: ((SubPlan 1))\n               ->  Sort\n                     Output: ((SubPlan 1)), t1_1.v, t1_1.id\n                     Sort Key: ((SubPlan 1))\n                     ->  Seq Scan on pg_temp.gstest5 t1_1\n                           Output: (SubPlan 1), t1_1.v, t1_1.id\n                           SubPlan 1\n                             ->  Bitmap Heap Scan on pg_temp.gstest5 t2\n                                   Output: t1_1.v\n                                   Recheck Cond: (t2.id = t1_1.id)\n                                   ->  Bitmap Index Scan on gstest5_pkey\n                                         Index Cond: (t2.id = t1_1.id)\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "c7cee77420eba3f9acf79931a6a1b68a3f8d5df0b47fe571231e81d741bcc0a4",
+      "occurrence": 1,
+      "sql_line": 695,
+      "kind": "text_plan",
+      "before_sha256": "b41d0dfc2188ed87a47c2551510ba2e49f6af02da9eb956bd88c7bcf2ce1b6e8",
+      "after": "                               QUERY PLAN                                \n-------------------------------------------------------------------------\n Sort\n   Output: (1), (NULL::integer), (NULL::integer), t1.v\n   Sort Key: (NULL::integer) NULLS FIRST\n   ->  Append\n         ->  HashAggregate\n               Output: 1, NULL::integer, NULL::integer, t1.v\n               Group Key: t1.v\n               ->  Seq Scan on pg_temp.gstest5 t1\n                     Output: t1.id, t1.v\n         ->  GroupAggregate\n               Output: 0, ((SubPlan 1)), ((SubPlan 1)), NULL::integer\n               Group Key: ((SubPlan 1))\n               ->  Sort\n                     Output: ((SubPlan 1)), t1_1.v, t1_1.id\n                     Sort Key: ((SubPlan 1))\n                     ->  Seq Scan on pg_temp.gstest5 t1_1\n                           Output: (SubPlan 1), t1_1.v, t1_1.id\n                           SubPlan 1\n                             ->  Bitmap Heap Scan on pg_temp.gstest5 t2\n                                   Output: t1_1.v\n                                   Recheck Cond: (t2.id = t1_1.id)\n                                   ->  Bitmap Index Scan on gstest5_pkey\n                                         Index Cond: (t2.id = t1_1.id)\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "996b6354483738c704ef94877883ce17fd6367f8f8fbc0bd667ca6906b8ef225",
+      "occurrence": 1,
+      "sql_line": 715,
+      "kind": "text_plan",
+      "before_sha256": "e349deaa642046ac6bd96b36a0a2ea8a31d138d68f3a03ebd4b95961e33a046c",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Append\n   ->  Result\n         One-Time Filter: NULL::boolean\n   ->  Group\n         ->  Result\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "f15b597c0aee32c7aac8091039fd77dbec276eaee7de1ba52f24c15fafa47fc3",
+      "occurrence": 1,
+      "sql_line": 719,
+      "kind": "text_plan",
+      "before_sha256": "0c32cfaa65622e4b8b589598fbe42a6a78c16ee4fb4f751d8324998e56af2245",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Append\n   ->  Result\n         One-Time Filter: NULL::boolean\n   ->  Group\n         ->  Result\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "2dc891774398beed695ec13016f460f375bca7cfb5f95bf0733d01e1ab017ca4",
+      "occurrence": 1,
+      "sql_line": 757,
+      "kind": "text_plan",
+      "before_sha256": "dc51b2b29adfba8caf26da18b90c5fcc4a262f260c8a7fb2ebc6cc986ec8ac3a",
+      "after": "               QUERY PLAN                \n-----------------------------------------\n Sort\n   Sort Key: (NULL::integer) NULLS FIRST\n   ->  Append\n         ->  Result\n         ->  Group\n               ->  Result\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "c3046a76e70781d6ec8900d6c161c8be8f8014ee8b169c0c021ec4c43592c9a0",
+      "occurrence": 1,
+      "sql_line": 782,
+      "kind": "text_plan",
+      "before_sha256": "9b6ed68dff8297cf5fdd92d612d0aca2ac73578d14db41e190c85dd2a00ac96a",
+      "after": "                                                              QUERY PLAN                                                               \n---------------------------------------------------------------------------------------------------------------------------------------\n Sort\n   Output: (generate_series(1, NULL::integer)), (NULL::integer), (NULL::integer)\n   Sort Key: (generate_series(1, NULL::integer)), (NULL::integer)\n   ->  Append\n         ->  ProjectSet\n               Output: generate_series(1, NULL::integer), NULL::integer, NULL::integer\n               ->  Result\n         ->  ProjectSet\n               Output: generate_series(1, \"*VALUES*\".column1), NULL::integer, \"*VALUES*\".column1\n               ->  Group\n                     Output: \"*VALUES*\".column1\n                     Group Key: \"*VALUES*\".column1\n                     ->  Sort\n                           Output: \"*VALUES*\".column1\n                           Sort Key: \"*VALUES*\".column1\n                           ->  Values Scan on \"*VALUES*\"\n                                 Output: \"*VALUES*\".column1\n         ->  ProjectSet\n               Output: generate_series(1, \"*VALUES*_1\".column1), ((\"*VALUES*_1\".column1 + \"*VALUES*_1\".column2)), \"*VALUES*_1\".column1\n               ->  Group\n                     Output: \"*VALUES*_1\".column1, ((\"*VALUES*_1\".column1 + \"*VALUES*_1\".column2))\n                     Group Key: \"*VALUES*_1\".column1, ((\"*VALUES*_1\".column1 + \"*VALUES*_1\".column2))\n                     ->  Sort\n                           Output: ((\"*VALUES*_1\".column1 + \"*VALUES*_1\".column2)), \"*VALUES*_1\".column1\n                           Sort Key: \"*VALUES*_1\".column1, ((\"*VALUES*_1\".column1 + \"*VALUES*_1\".column2))\n                           ->  Values Scan on \"*VALUES*_1\"\n                                 Output: (\"*VALUES*_1\".column1 + \"*VALUES*_1\".column2), \"*VALUES*_1\".column1\n(27 rows)\n"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # Reviewed diagnostic expectations and SQL choice proofs
 
-These thirteen profiles change 61 complete diagnostic tables under the owner's
-SQL/protocol compatibility contract: 49 direct EXPLAIN tables, 11 results of
+These fourteen profiles change 69 complete diagnostic tables under the owner's
+SQL/protocol compatibility contract: 57 direct EXPLAIN tables, 11 results of
 reviewed EXPLAIN wrappers, and one allocator inventory query. They do not replace
 vendor SQL or expected files. Measured root rows/loops cannot change or disappear;
 the two incremental-sort JSON projections also retain their measured counts.
@@ -21,6 +21,7 @@ the two incremental-sort JSON projections also retain their measured counts.
 | memoize | 7 | One direct plan plus six wrapper results with unavailable internal counters |
 | incremental_sort | 17 | Thirteen direct plans, two text wrappers and two JSON plan projections |
 | sysviews | 1 | No PostgreSQL `Caller tuples` context in the engine cursor allocation path |
+| groupingsets | 8 | Grouping-set union alternatives and their inherited first-arm expression labels |
 
 Each profile binds the whole SQL source, original expectation, statement occurrence
 and original plan table by SHA-256. Replacements are exact aligned plan tables;
@@ -33,14 +34,24 @@ allocator observation accepts an empty result; the companion live probe checks
 cursor values, byte accounting and view permissions. Errors, notices and other
 data remain strict. A profile never grows when new output is encountered.
 
-The [choice policy](policy/choices.json) admits four exact queries already covered
+The [choice policy](policy/choices.json) admits five exact queries already covered
 by live native/candidate probes. `choice_witness.py` proves their captured rows:
 only the two named infinite-distance point peers may swap; circle peers retain
 identical radius, point x coordinate and Infinity/NaN distance; DISTINCT ON keeps
 one valid source representative per SRF group; and the named full-partition JSON
 aggregate preserves exact integer elements, duplicates and one consistent array
-per partition. Finite geometric values never acquire ties from rounded output.
+per partition. The grouping-set witness permits only permutations within equal
+`coalesce(a,0)+coalesce(b,0)` integer keys, preserving every aggregate value.
+Finite geometric values never acquire ties from rounded output.
 Unknown queries, changed elements, duplicate loss and missing rows fail.
+
+`grouping_contract.py` independently calculates grouping results for NULL keys,
+empty inputs, duplicate grouping sets, HAVING and windows. Ten cases run against
+native PostgreSQL and each of the fork's default, off and forced rewrite modes.
+The probe verifies that off/force selects the original/union plan family. Native
+PostgreSQL also labels sorted UNION ALL columns using the first arm's expression
+(even a constant); the captured plans use that convention, while actual values
+and ordering remain checked.
 
 `scripts/validation/engine_regression_profile.py --record` is an explicit authoring
 operation requiring a reason and a new file. It refuses to record a case if any
@@ -51,7 +62,7 @@ x86-64 as well as the two earlier runs. The full
 auditor first requires every native result to match a pinned PostgreSQL fixture;
 whole-file upstream alternatives cover optional feature/platform branches.
 
-The raw suite remains separate. The reviewed profile accepts 223/231 cases, with
-eight unresolved cases. This is not a complete compatibility or production claim.
+The raw suite remains separate. The reviewed profile accepts 224/231 cases, with
+seven unresolved cases. This is not a complete compatibility or production claim.
 See [the investigation](../../docs/compatibility-investigation.md) and
-[retained evidence](../../artifacts/validation/semantic-contract-2026-10-30/README.md).
+[retained evidence](../../artifacts/validation/grouping-contract-2026-10-30/README.md).

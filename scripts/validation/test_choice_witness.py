@@ -8,6 +8,20 @@ from compare_regression import columns, find_anchor, physical_lines, statements,
 
 
 class ChoiceWitnessTests(unittest.TestCase):
+    def test_integer_sum_peers_keep_all_values_and_key_order(self):
+        rows = [" | |0", "1| |1", "2| |2", "1|1|3", "3| |4", "1|2|5"]
+        spans = [(0, 1), (2, 3), (4, 5)]
+        for middle, final in product(permutations(rows[2:4]), permutations(rows[4:6])):
+            self.assertTrue(prove("grouping_coalesce_sum", rows, rows[:2] + list(middle) + list(final), spans))
+        for actual in ([rows[1], rows[0], *rows[2:]], [*rows[:2], rows[2], rows[2], *rows[4:]],
+                       [*rows[:-1], "1|2|6"], [rows[0], rows[4], *rows[2:4], rows[1], rows[5]]):
+            self.assertFalse(prove("grouping_coalesce_sum", rows, actual, spans))
+
+    def test_integer_sum_refuses_rounded_or_overflowing_keys(self):
+        for values in (("1.0", "1"), ("01", "1"), ("2147483647", "1"), ("2147483648", "0")):
+            row = f"{values[0]:<12}|{values[1]:<12}"
+            self.assertFalse(prove("grouping_coalesce_sum", [row], [row], [(0, 12), (13, 25)]))
+
     def test_infinite_peers_preserve_every_row(self):
         rows = ["(0,0)", "(1e+300,Infinity)", "(Infinity,1e+300)", "(NaN,NaN)"]
         spans = [(0, 30)]

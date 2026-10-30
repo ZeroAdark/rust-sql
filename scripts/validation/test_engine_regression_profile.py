@@ -1,5 +1,6 @@
 import copy
 import unittest
+from unittest.mock import patch
 
 from compare_regression import compare
 from engine_regression_profile import apply, digest, plan_tables, propose
@@ -14,6 +15,21 @@ AFTER = BEFORE.replace(PG, ENGINE)
 
 
 class EngineProfileTests(unittest.TestCase):
+    def test_scoped_choice_does_not_bless_other_changes(self):
+        sql = "SELECT a,b FROM t ORDER BY coalesce(a,0)+coalesce(b,0);"
+        source = "EXPLAIN SELECT 1;\n" + sql + "\n"
+        before = "EXPLAIN SELECT 1;\n" + PG + "\n" + sql + "\n a | b \n---+---\n 1 | 1\n 2 |  \n(2 rows)\n"
+        after = before.replace(PG, ENGINE).replace(" 1 | 1\n 2 |  \n", " 2 |  \n 1 | 1\n")
+        entry = {digest(source): {"expected_sha256": digest(before), "statements": {
+            digest(sql): {"kind": "grouping_coalesce_sum", "columns": ["a", "b"]}}}}
+        with patch("choice_witness.policy", return_value=entry):
+            profile = propose(source, before, after, "plan and independently proven peer order")
+            self.assertEqual(len(profile["plans"]), 1)
+            self.assertIn(" 1 | 1\n 2 |  \n", apply(source, before, profile))
+            for invalid in (after.replace(" 1 | 1", " 1 | 2"), after + "ERROR: failure\n"):
+                with self.assertRaises(ValueError):
+                    propose(source, before, invalid, "invalid")
+
     def setUp(self):
         self.profile = propose(SOURCE, BEFORE, AFTER, "Explicit engine plan")
 

@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from choice_witness import compare_choices
 from compare_regression import ORDER, compare, find_anchor, physical_lines, statements
 from diagnostic_policy import bindings, display_table, guard_change
 
@@ -104,7 +105,8 @@ def propose(source, expected, actual, reason):
                                      "kind": original["rule"]["kind"],
                                      "before_sha256": digest(original["text"]),
                                      "after": candidate["text"]})
-    check, diff = compare(source, apply(source, expected, profile), actual)
+    checked_actual, _ = compare_choices(source, expected, actual)
+    check, diff = compare(source, apply(source, expected, profile), checked_actual)
     if not check["equal_after_permitted_order"] or check["refused"]:
         raise ValueError("non-plan differences remain; profile refused\n" + diff[:400])
     return profile
@@ -131,9 +133,10 @@ def main():
         with args.profile.open("x", encoding="utf-8", newline="\n") as output:
             output.write(json.dumps(profile, indent=2) + "\n")
     profile = json.loads(read(args.profile))
-    report, diff = compare(source, apply(source, expected, profile), actual)
+    checked_actual, proofs = compare_choices(source, expected, actual)
+    report, diff = compare(source, apply(source, expected, profile), checked_actual)
     report.update(profile=str(args.profile), profile_sha256=digest(read(args.profile)),
-                  reviewed_plan_tables=len(profile["plans"]))
+                  reviewed_plan_tables=len(profile["plans"]), scoped_choice_proofs=proofs)
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.diff.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2) + "\n")
