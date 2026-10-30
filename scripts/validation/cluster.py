@@ -8,7 +8,7 @@ import time
 
 
 class Cluster:
-    def __init__(self, binaries, work_dir, *, reference=False, settings=()):
+    def __init__(self, binaries, work_dir, *, reference=False, settings=(), launcher=()):
         if os.geteuid() == 0:
             raise RuntimeError("run validation as a non-root user")
         self.binaries = Path(binaries).resolve()
@@ -20,6 +20,7 @@ class Cluster:
         self.env.update(PGHOST=str(self.socket), PGPORT="55440", PGUSER="rustsql", PGDATABASE="postgres",
                         PGCONNECT_TIMEOUT="3", RUST_MIN_STACK="33554432", PGAPPNAME="rustsql-validation")
         self.reference, self.settings = reference, list(settings)
+        self.launcher = list(launcher)
         self.process, self.log = None, None
 
     @property
@@ -52,7 +53,7 @@ class Cluster:
             cmd += ["-c", setting]
         self.log = (self.root / "server.log").open("a")
         # A private process group allows SIGKILL to reach the supervisor AND server child.
-        self.process = subprocess.Popen(cmd, env=self.env, stdout=self.log, stderr=self.log, start_new_session=True)
+        self.process = subprocess.Popen(self.launcher + cmd, env=self.env, stdout=self.log, stderr=self.log, start_new_session=True)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             if self.process.poll() is not None:

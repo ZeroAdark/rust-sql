@@ -2,6 +2,60 @@
 
 CPU savings are the primary goal. Bounded memory increases are acceptable when the CPU benefit is measured; correctness and latency remain release gates.
 
+## Fixed-work resource matrix, 2026-10-30
+
+The current runtime (`faf62fc4a544b2d033d812b9728b54ecfcf390ad`, binary
+`a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b`)
+was compared with upstream `38634b408dea373f3944006dfbf74d19cbfc409f`
+(`bd9c8954d1c58ac3c0dcea5035af7cf44fc7c0e4bf8acb243a034132781d35e3`).
+This is a newer candidate and a different workload from the earlier measurements
+below. Do not combine their numbers.
+
+Forty interleaved trials cover five repetitions per binary at each of 1/2/4/8 GiB,
+with four server CPUs, six ordinary-role clients and one million columnar fact
+rows. A fixed bundle contains twelve indexed reads, four committed updates and
+three analytical queries. Every trial checks all results and protocol types, then
+checks every changed account again after restart. All 1,824,000 measured statements
+passed; there were no workload errors, OOM events, swap use, memory-limit events
+or CPU throttling. A separate small-process control verifies that the accounting
+detects an intentional OOM and includes exited child CPU while excluding clients.
+
+The host is the same WSL2 workstation described below. Server affinity was
+0/2/4/6 and client affinity 8/10, with separate cgroup limits. These are guest CPU
+affinities, not exclusive reservations of the Windows host. This remains
+development evidence. See the [full method and commands](resource-benchmark.md)
+and [retained reports](../artifacts/validation/resource-matrix-2026-10-30/README.md).
+
+Medians across five trials per binary and limit; negative CPU changes are better:
+
+| Memory cap | Upstream CPU us/bundle | Fork CPU us/bundle | CPU change | Throughput change | Largest per-query p99 increase |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 GiB | 16,835.42 | 16,851.73 | +0.10% | -0.02% | +3.52% |
+| 2 GiB | 16,253.54 | 16,243.41 | -0.06% | -0.30% | +2.18% |
+| 4 GiB | 16,265.60 | 16,270.87 | +0.03% | -0.49% | +0.75% |
+| 8 GiB | 16,180.33 | 16,334.82 | +0.95% | -1.10% | +2.49% |
+
+**No end-to-end CPU saving is demonstrated.** The stable prepared workload does
+not exercise the LRU eviction improvement. At 8 GiB, all five paired CPU changes
+are increases (0.006% to 1.645%); retain that cost in further investigation. The
+provisional median throughput and query-specific p99 limits pass at all four
+caps, but the required CPU improvement and server qualification remain open.
+Five observations are not a confidence interval. Full paired values and ranges
+are retained rather than hiding variation behind these medians.
+
+Median sampled peaks, in MiB; charged memory and PSS measure different things:
+
+| Cap | Upstream cgroup | Fork cgroup | Upstream PSS | Fork PSS |
+| --- | ---: | ---: | ---: | ---: |
+| 1 GiB | 349.54 | 349.37 | 357.20 | 372.44 |
+| 2 GiB | 585.57 | 607.78 | 608.18 | 628.15 |
+| 4 GiB | 657.32 | 655.64 | 681.34 | 675.88 |
+| 8 GiB | 681.86 | 652.76 | 707.94 | 675.64 |
+
+RSS, whole-trial cgroup peaks, user/system CPU, throttling and every query's
+p50/p95/p99 remain in the raw reports. This dataset fits below the caps: it does
+not establish behavior under overload, large spills or sustained maintenance.
+
 ## Environment and method
 
 2026-10-29: Ubuntu 24.04 on WSL2, Linux x86-64, Ryzen 7 9800X3D (16 logical CPUs visible), approximately 30 GiB RAM, ext4 build/data, Rust 1.96.0, locked release profile (thin LTO, one codegen unit). This is a development workstation measurement, not bare-metal server qualification. Windows load, virtualization, frequency changes and filesystem/cache state can affect results. No CPU pinning was applied.
