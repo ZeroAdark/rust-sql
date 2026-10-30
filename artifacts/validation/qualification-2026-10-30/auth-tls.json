@@ -1,0 +1,124 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "name": "scram_storage",
+      "passed": true
+    },
+    {
+      "name": "verify_full_scram_channel_binding",
+      "passed": true,
+      "tls": "TLSv1.3",
+      "bits": 256
+    },
+    {
+      "name": "tls_12",
+      "passed": true,
+      "tls": "TLSv1.2",
+      "bits": 256
+    },
+    {
+      "name": "tls_13",
+      "passed": true,
+      "tls": "TLSv1.3",
+      "bits": 256
+    },
+    {
+      "name": "incorrect_password",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  password authentication failed for user \"scram_user\""
+    },
+    {
+      "name": "unknown_role",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  password authentication failed for user \"unknown_role\""
+    },
+    {
+      "name": "no_login_role",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  role \"no_login\" is not permitted to log in"
+    },
+    {
+      "name": "expired_password",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  password authentication failed for user \"expired_user\""
+    },
+    {
+      "name": "database_connect_denied",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  permission denied for database \"forbidden\"\nDETAIL:  User does not have CONNECT privilege."
+    },
+    {
+      "name": "no_tcp_trust_for_admin",
+      "passed": true,
+      "rejected": "connection failed: fe_sendauth: no password supplied"
+    },
+    {
+      "name": "plaintext_rejected",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  pg_hba.conf rejects connection for host \"127.0.0.1\", user \"scram_user\", database \"postgres\", no encryption"
+    },
+    {
+      "name": "wrong_ca_rejected",
+      "passed": true,
+      "rejected": "connection failed: SSL error: certificate verify failed"
+    },
+    {
+      "name": "wrong_hostname_rejected",
+      "passed": true,
+      "rejected": "connection failed: server certificate for \"localhost\" (and 1 other name) does not match host name \"wrong.invalid\""
+    },
+    {
+      "name": "missing_client_certificate",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  connection requires a valid client certificate"
+    },
+    {
+      "name": "client_certificate",
+      "passed": true,
+      "tls": "TLSv1.3",
+      "bits": 256
+    },
+    {
+      "name": "wrong_certificate_identity",
+      "passed": true,
+      "rejected": "connection failed: FATAL:  certificate authentication failed for user \"cert_user\""
+    },
+    {
+      "name": "failed_reload_retains_valid_context",
+      "passed": true,
+      "tls": "TLSv1.3",
+      "bits": 256
+    },
+    {
+      "name": "scram_channel_binding_after_certificate_rotation",
+      "passed": true,
+      "tls": "TLSv1.3",
+      "bits": 256
+    },
+    {
+      "name": "existing_session_survives_certificate_rotation",
+      "passed": true
+    },
+    {
+      "name": "insecure_private_key_permissions_reject_startup",
+      "passed": true
+    },
+    {
+      "name": "secure_restart_after_permission_repair",
+      "passed": true
+    }
+  ],
+  "failures": [],
+  "binary_sha256": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+  "cluster": "/home/rustsql/conformance/compat-2tjfykdo",
+  "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build 0447a2b) on x86_64-unknown-linux-gnu, 64-bit",
+  "client": {
+    "psycopg": "3.1.17",
+    "libpq": 160015
+  },
+  "certificate_rotation": {
+    "before_sha256": "6327803eaa23efe3c76d0f848e68599028c18a834a0f52c0944b4088dae3bdbd",
+    "after_sha256": "3ff583cb7560eae23b6b1e623a5c65041864c46ee49bccd7b9bc98f008008543"
+  }
+}

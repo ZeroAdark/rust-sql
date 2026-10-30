@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "reason": "Gravity does not use PostgreSQL Gather backend workers for debug_parallel_query; function results and exceptions remain unchanged.",
+  "source_sha256": "b1127a02f3004736e377c5d32f52faa7f93a6d015382986913fd8e9e678f01fa",
+  "expected_sha256": "23b0f4e7a4bf577a0ee4fbb44f8fa7e39cb19dc5fa3fb85b42761a974567d99b",
+  "plans": [
+    {
+      "sql_sha256": "5aa65629426cb57c14763eab13d1856b69497f2d8bebe17c04604b1d7be57c04",
+      "occurrence": 1,
+      "sql_line": 3435,
+      "before_sha256": "cc1a6d0ed76405f10b11fe23f112528deca86aae8029ac4fa219c61d700564fa",
+      "after": "         QUERY PLAN          \n-----------------------------\n Result\n   Output: error_trap_test()\n(2 rows)\n"
+    }
+  ]
+}

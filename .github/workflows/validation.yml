@@ -83,6 +83,11 @@ jobs:
           python3 scripts/validation/recovery_probe.py --candidate target/release \
             --reference-clients "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/recovery.json --cycles 10
+      - name: Server authentication, TLS and certificate rotation
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/auth_tls_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/auth-tls.json
       - run: |
           ulimit -s 65520
           python3 scripts/validation/server_smoke.py --bin-dir target/release \
@@ -102,6 +107,13 @@ jobs:
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/postgres-raw.json \
             --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
             --reference-bin "$RUNNER_TEMP/postgres18/bin"
+      - name: Reviewed engine regression contract
+        if: always()
+        run: |
+          python3 scripts/validation/engine_regression_audit.py \
+            --fixtures crates/postgres-18.6-reference/src/test/regress \
+            --reference-report artifacts/native-regression.json \
+            --candidate-report artifacts/postgres-raw.json --output artifacts/engine-contract
       - name: Build separately patched PostgreSQL window control
         if: always()
         run: |
@@ -125,6 +137,7 @@ jobs:
           name: server-smoke
           path: |
             artifacts/*.json
+            artifacts/engine-contract/**
             ${{ runner.temp }}/rustsql-checks/*/server.log
             ${{ runner.temp }}/rustsql-checks/*/initdb.log
             ${{ runner.temp }}/rustsql-checks/*/regression/regression.*
