@@ -1,0 +1,95 @@
+{
+  "source_head": "046beaa9bb2bc01baf5a54d58c543c0b7c1c13e2",
+  "candidate_accepted": false,
+  "production_qualified": false,
+  "retained_allocator_tests": {
+    "executables": 82,
+    "passed": 112,
+    "failed": 0,
+    "ignored": 1
+  },
+  "experimental_allocator_tests": {
+    "executables": 83,
+    "passed": 113,
+    "failed": 0,
+    "ignored": 1
+  },
+  "runtime_sources_restored_to_parent": {
+    "crates/_support/pagepool/src/os.rs": true,
+    "crates/_support/pagepool/src/run.rs": true,
+    "crates/_support/pagepool/src/small.rs": true
+  },
+  "connection_source_and_report_validation": true,
+  "connection_validation_rejects_tampering": {
+    "wrong_binary": true,
+    "wrong_limit": true,
+    "missing_startup": true
+  },
+  "connection_all_pairs_more_cpu": true,
+  "mixed_evidence_valid": true,
+  "mixed_measured_statements": 456000,
+  "pressure": [
+    {
+      "name": "small-pages-2g-20261030",
+      "passed": true,
+      "waves": 2,
+      "peak_mib": 1998.93359375,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "name": "small-pages-baseline-2g-20261030",
+      "passed": false,
+      "waves": 0,
+      "peak_mib": 2048.0,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 287,
+        "oom": 4,
+        "oom_kill": 3,
+        "oom_group_kill": 1
+      }
+    },
+    {
+      "name": "small-pages-repeat2-2g-20261030",
+      "passed": true,
+      "waves": 2,
+      "peak_mib": 2029.08984375,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "name": "small-pages-repeat3-2g-20261030",
+      "passed": true,
+      "waves": 2,
+      "peak_mib": 1985.25,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    }
+  ],
+  "scope": "Rejected runtime experiment; only frame test/CI/docs retained. Runtime remains the previously qualified-scope connection-queue binary.",
+  "portable_replay_byte_identical": {
+    "mixed": true,
+    "connection": true
+  },
+  "archive_readback": "all 155 regular members match their retained source bytes"
+}

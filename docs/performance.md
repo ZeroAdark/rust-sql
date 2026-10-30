@@ -220,6 +220,20 @@ The separate 800-startup pilot with mimalloc passes under a 2 GiB cap at a 1,073
 
 A separate read-only residency probe captures two held 800-startup phases with Hearth. Most resident memory is concentrated in three anonymous 1 GiB mappings separated by 2 MiB guards, consistent with the pool layout in `pagepool/src/reserve.rs`; this is an inference from the mappings and source, not a complete allocation attribution. The capture adds diagnostic overhead and is not a performance trial. Targeted pool memory work, a complete matrix and Linux-server qualification remain open. [Raw reports, sources, logs, residency captures and replay instructions](../artifacts/validation/allocator-selection-2026-10-30/README.md) preserve both the memory benefit and performance failure.
 
+## Sparse small-run policy (2026-10-30)
+
+**Rejected; the runtime remains unchanged.** An experimental Hearth change advised base pages for general small-object runs before their first free-list write, reapplied the advice on reuse, and restored the pool policy on return. It kept the per-object allocation/free paths unchanged, but added kernel calls on run acquisition and return. Linux documents how a sparse write into a huge-page mapping can populate substantially more memory than the application touched. [Kernel THP documentation](https://docs.kernel.org/admin-guide/mm/transhuge.html)
+
+The cold-run test fails on the original code. A control applying advice only after the first write also fails its residency assertion; the complete experiment passes, including content preservation and policy restoration. Its normal allocator suite passes 113 tests with one helper ignored by design.
+
+Five interleaved mixed-workload pairs at 4 GiB, with six clients and `max_active_queries=6`, show effectively unchanged median CPU per bundle (-0.0018%), throughput +0.37%, and all median query p99 changes within the 5% limits. All ten trials pass their result, committed-update and clean-restart checks (456,000 measured statements). Sampled peak cgroup memory changes by -2.75% by the medians, but the direction varies across pairs. This does not demonstrate a CPU improvement or a consistent general memory reduction.
+
+A separate comparison holds both binaries at 4 GiB for five interleaved pairs of two 800-connection waves. It verifies 16,000 accepted startups and 20 overflow rejections. Server CPU per accepted startup rises from 1,657.875 to 2,026.376 microseconds by the medians (**+22.23%**); every pair increases (+3.59% to +30.31%). Median first-wave completion time rises 146.09%; this includes client orchestration and diagnostic snapshots, so it is not standalone authentication latency. Peak cgroup memory changes only -1.65% by the medians. The CPU regression rejects the change despite the steady-workload result.
+
+Three separate 2 GiB candidate runs complete both waves without memory-limit events, swap or leftover processes. Peaks are 1,985.25, 1,998.93 and 2,029.09 MiB, leaving as little as 18.91 MiB of headroom. A fresh baseline control is OOM-killed before completing a wave. These candidate pilots do not qualify the current runtime at 2 GiB: the candidate was rejected, and even its idle-connection headroom is insufficient to claim a safe active-query operating limit.
+
+The retained change repairs the frame-zone test's measurement boundary: it verifies the returned pages are resident, then counts faults during touches rather than including first-touch allocation bookkeeping. The original assertion also fails on the unchanged baseline. The retained source passes all 112 normal allocator tests (one helper ignored), and the focused frame test now runs in Linux CI. Full SQL/isolation/crash campaigns were not repeated for the rejected binary. [Evidence, source patch, controls and portable replay](../artifacts/validation/allocator-small-pages-2026-10-30/README.md) retain both the successful pilots and the CPU failure.
+
 Within a delegated service configured as described in [connection admission](connection-queue.md), reproduce the calibration with:
 
 ```sh

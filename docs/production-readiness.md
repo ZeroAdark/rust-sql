@@ -20,6 +20,8 @@ The preceding transaction-admission binary passes 20 checked mixed-workload tria
 
 The [allocator calibration](performance.md#allocator-selection-2026-10-30) keeps the current Hearth default: mimalloc halves sampled peak cgroup memory but increases median CPU per bundle by 4.20%, reduces throughput by 10.66%, and increases aggregate p99 by 12.16%. All ten trials pass correctness and restart checks; both performance gates fail. Its separate 2 GiB connection pilot passes, but does not justify a CPU/latency regression. Targeted pool memory work remains open.
 
+The subsequent [small-run page-policy experiment](performance.md#sparse-small-run-policy-2026-10-30) is also rejected. Mixed-workload CPU is effectively flat, but controlled 4 GiB connection waves cost 22.23% more CPU per accepted startup by the medians, with an increase in every pair. Three candidate 2 GiB pilots pass with only 18.91 MiB minimum headroom; a fresh baseline still suffers an OOM group kill. The current runtime's failed 2 GiB connection gate remains open. Only a frame-test measurement correction and its CI check are retained; the retained source passes 112 allocator tests, with one helper ignored by design.
+
 ## Acceptance policy
 
 SQL results and protocol remain the compatibility target. Truthful engine-specific EXPLAIN/statistics are accepted; unavailable counters must be absent. See the [approved contract, race reproduction and independent window oracle](compatibility-investigation.md). Raw PostgreSQL output and reviewed engine expectations remain separate profiles.

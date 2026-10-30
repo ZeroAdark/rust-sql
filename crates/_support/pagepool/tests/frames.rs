@@ -36,8 +36,11 @@ fn frames() {
     if c.moved > 0 {
         assert_eq!(kept, 8 * MIB);
         assert_eq!(stats().moved_vmas, 0);
-        let f0 = minflt();
         let s = span(2 * MIB, Hint::new(Class::Task, Tag::OTHER)).unwrap();
+        // Acquiring a span can first-touch allocator bookkeeping. Check the returned
+        // memory itself before measuring touches; metadata faults do not make it cold.
+        assert_eq!(resident(s.as_ptr() as usize, s.len()), s.len(), "returned frame pages are resident before use");
+        let f0 = minflt();
         touch(s.as_ptr() as usize, s.len());
         assert_eq!(minflt() - f0, 0, "a superpage frames gave back is warm");
         // SAFETY: ours, not used again.
