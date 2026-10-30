@@ -92,6 +92,9 @@ jobs:
           python3 scripts/validation/aggregate_strategy_probe.py --candidate-bin target/release \
             --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/aggregate-strategy.json
+          python3 scripts/validation/parallel_contract_probe.py --candidate-bin target/release \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/parallel-contract.json
           python3 scripts/validation/catalog_churn_probe.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/catalog-churn.json

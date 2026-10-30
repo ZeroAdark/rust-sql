@@ -322,6 +322,29 @@
           "sql_line": 501
         }
       }
+    },
+    "6d8598c9140470181dbf79b07b1258b1c17a4f4b58531b5141f1a469f27fafac": {
+      "case": "select_parallel",
+      "definitions": {
+        "explain_parallel_sort_stats": "7564b3576cd548df072ad364fc8648bd55cb9696d12282ed60836aa2691a3831"
+      },
+      "statements": {
+        "47777481ebdfec9bcdf82a9a99bdf76295fa8f10de434321d8c68785abf5f376": {
+          "kind": "text_plan",
+          "header": "explain_parallel_sort_stats",
+          "sql_line": 255,
+          "sql": "select * from explain_parallel_sort_stats();"
+        },
+        "e6677f142c3b8019288c6e194e52413f0a65d001117ef6c4910eb7a2a731e8c7": {
+          "kind": "postgres_worker_activity",
+          "columns": [
+            "wrk_to_launch",
+            "wrk_launched"
+          ],
+          "sql_line": 587,
+          "sql": "select parallel_workers_to_launch > :'parallel_workers_to_launch_before'  AS wrk_to_launch,\n       parallel_workers_launched > :'parallel_workers_launched_before' AS wrk_launched\n  from pg_stat_database\n  where datname = current_database();"
+        }
+      }
     }
   }
 }

@@ -1,0 +1,17 @@
+{
+  "passed": false,
+  "total": 231,
+  "accepted": 229,
+  "unresolved": [
+    "merge",
+    "window"
+  ],
+  "reference_report_sha256": "1201bde6398bcd27ca846f9438701314543da066eb6e04fb4b17ec00b6c44e99",
+  "candidate_report_sha256": "1af21e671b71b58842cf45ef9d3a9152699219404dfe5afa24c66bf8da4a91ca",
+  "diagnostic_policy_sha256": "398fe305331204b2568237db568d98f46c274ebbb34616e69bca05a8dc58715c",
+  "choice_policy_sha256": "658724128e4a06246bd630b44d13ef8ccbe3da82918f5918a2af16cb666dad0b",
+  "aggregate_strategy_policy_sha256": "c112e25d6dd40077110fde4351cc0b7b34e6de2a76cbfce90e5ca6ab3a08982a",
+  "worker_context_policy_sha256": "d2a7f0304d29d6a8f42be180fc921e4495b37897b93774264616ca9b602fd857",
+  "raw_candidate_verdict": false,
+  "full_audit_archive_member": "audits/first/summary.json"
+}

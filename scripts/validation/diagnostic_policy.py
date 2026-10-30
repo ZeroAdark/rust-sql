@@ -15,7 +15,7 @@ MASKED_ROOTS = {
     "rows": "(actual rows=N loops=N)",
     "timed": "(actual time=N.N..N.N rows=N.N loops=N)",
 }
-STATISTIC_KINDS = {"memory_context_absence", "unavailable_hash_metrics"}
+STATISTIC_KINDS = {"memory_context_absence", "unavailable_hash_metrics", "postgres_worker_activity"}
 
 
 def json_object(pairs):
@@ -130,6 +130,12 @@ def guard_change(before, after, rule):
     if kind == "memory_context_absence":
         if after:
             raise ValueError("the reviewed allocator observation requires an empty result")
+    elif kind == "postgres_worker_activity":
+        if rule.get("columns") != ["wrk_to_launch", "wrk_launched"] or len(before) != 1 or len(after) != 1:
+            raise ValueError("worker activity requires one row with both counters")
+        if ([cell.strip(" ") for cell in before[0].split("|")] != ["t", "t"] or
+                [cell.strip(" ") for cell in after[0].split("|")] != ["f", "f"]):
+            raise ValueError("reviewed execution has no PostgreSQL backend worker activity")
     elif kind == "unavailable_hash_metrics":
         if len(before) != 1 or len(after) != 1:
             raise ValueError("hash metric projection must return one row")

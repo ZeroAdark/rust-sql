@@ -4,9 +4,10 @@
 Profiles contain exact replacement plan tables, never regex masks. Recording is
 an explicit authoring operation; verification only reads committed profiles.
 Only the separately reviewed diagnostic policy can admit specific helper results
-or allocator observations. Independent witnesses prove pinned SQL choices and one
-deliberately non-equivalent aggregate fixture's serial result. Ordinary SQL
-values, errors and notices stay untouched.
+or allocator observations. Independent witnesses prove pinned SQL choices, one
+deliberately non-equivalent aggregate fixture's serial result and two worker-stack
+omissions. Ordinary SQL values, primary errors, SQL-function context and notices
+stay untouched.
 """
 import argparse
 from collections import Counter

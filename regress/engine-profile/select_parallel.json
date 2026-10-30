@@ -1,0 +1,400 @@
+{
+  "version": 1,
+  "reason": "Truthful execution plans and PostgreSQL backend worker counters. Root rows/loops remain guarded; two source-bound worker-context omissions preserve the complete primary error and SQL-function stack. The live probe verifies typed values, both error protocols, role restoration, transaction recovery and cumulative worker counters.",
+  "source_sha256": "6d8598c9140470181dbf79b07b1258b1c17a4f4b58531b5141f1a469f27fafac",
+  "expected_sha256": "c87cf320e3cea4cb425cb2894def2a904b80ed132b756c75ef9ad199930e31c5",
+  "plans": [
+    {
+      "sql_sha256": "393a4e72d884ca4ebe864654231f7f56b9f70062c14a1c97ca2cba70b890e251",
+      "occurrence": 1,
+      "sql_line": 24,
+      "kind": "text_plan",
+      "before_sha256": "6a61f37e204e801ebbc4733c74f6fb1ec20f68535bfe2b078deac289a71e7151",
+      "after": "               QUERY PLAN                \n-----------------------------------------\n Aggregate\n   ->  Append\n         ->  Seq Scan on a_star a_star_1\n         ->  Seq Scan on b_star a_star_2\n         ->  Seq Scan on c_star a_star_3\n         ->  Seq Scan on d_star a_star_4\n         ->  Seq Scan on e_star a_star_5\n         ->  Seq Scan on f_star a_star_6\n(8 rows)\n"
+    },
+    {
+      "sql_sha256": "393a4e72d884ca4ebe864654231f7f56b9f70062c14a1c97ca2cba70b890e251",
+      "occurrence": 2,
+      "sql_line": 31,
+      "kind": "text_plan",
+      "before_sha256": "6b1a86541e92a4e903ef17e8de5a8d9610f634a69ab7c0053f482c3a2e4b025a",
+      "after": "               QUERY PLAN                \n-----------------------------------------\n Aggregate\n   ->  Append\n         ->  Seq Scan on a_star a_star_1\n         ->  Seq Scan on b_star a_star_2\n         ->  Seq Scan on c_star a_star_3\n         ->  Seq Scan on d_star a_star_4\n         ->  Seq Scan on e_star a_star_5\n         ->  Seq Scan on f_star a_star_6\n(8 rows)\n"
+    },
+    {
+      "sql_sha256": "393a4e72d884ca4ebe864654231f7f56b9f70062c14a1c97ca2cba70b890e251",
+      "occurrence": 3,
+      "sql_line": 40,
+      "kind": "text_plan",
+      "before_sha256": "9a3129520b3406b7904f2d574fc6068104a1034885e511ecfa018e50c579b209",
+      "after": "               QUERY PLAN                \n-----------------------------------------\n Aggregate\n   ->  Append\n         ->  Seq Scan on a_star a_star_1\n         ->  Seq Scan on b_star a_star_2\n         ->  Seq Scan on c_star a_star_3\n         ->  Seq Scan on d_star a_star_4\n         ->  Seq Scan on e_star a_star_5\n         ->  Seq Scan on f_star a_star_6\n(8 rows)\n"
+    },
+    {
+      "sql_sha256": "393a4e72d884ca4ebe864654231f7f56b9f70062c14a1c97ca2cba70b890e251",
+      "occurrence": 4,
+      "sql_line": 52,
+      "kind": "text_plan",
+      "before_sha256": "4156ca7bd2d45f9978c0d5fbb14821d1c06cb7dd3ea858de180de80cb5851c5c",
+      "after": "               QUERY PLAN                \n-----------------------------------------\n Aggregate\n   ->  Append\n         ->  Seq Scan on a_star a_star_1\n         ->  Seq Scan on b_star a_star_2\n         ->  Seq Scan on c_star a_star_3\n         ->  Seq Scan on d_star a_star_4\n         ->  Seq Scan on e_star a_star_5\n         ->  Seq Scan on f_star a_star_6\n(8 rows)\n"
+    },
+    {
+      "sql_sha256": "c82fd7f7a5951bafd9d9218b46587d713352d4287d2a292ea8499b035e42760d",
+      "occurrence": 1,
+      "sql_line": 67,
+      "kind": "text_plan",
+      "before_sha256": "ec2613cf33fab843fa5f0b13ac24e01086d0046d3b21373178577f5281b3bdf9",
+      "after": "                   QUERY PLAN                    \n-------------------------------------------------\n Aggregate\n   ->  Append\n         ->  Seq Scan on part_pa_test_p1 pa2_1\n         ->  Seq Scan on part_pa_test_p2 pa2_2\n   SubPlan 2\n     ->  Result\n   SubPlan 1\n     ->  Append\n           ->  Seq Scan on part_pa_test_p1 pa1_1\n                 Filter: (a = pa2.a)\n           ->  Seq Scan on part_pa_test_p2 pa1_2\n                 Filter: (a = pa2.a)\n(12 rows)\n"
+    },
+    {
+      "sql_sha256": "de138e43014c457b0ffce2e432444d6916fddd709f8f29972fd682c21924b033",
+      "occurrence": 1,
+      "sql_line": 74,
+      "kind": "text_plan",
+      "before_sha256": "48980ee104963919a5d1343dba2904675e7beefcc4d7033978af343afe76b4e7",
+      "after": "                 QUERY PLAN                  \n---------------------------------------------\n Aggregate\n   ->  Seq Scan on tenk1\n         Filter: (stringu1 = 'GRAAAA'::name)\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "de138e43014c457b0ffce2e432444d6916fddd709f8f29972fd682c21924b033",
+      "occurrence": 2,
+      "sql_line": 81,
+      "kind": "text_plan",
+      "before_sha256": "48980ee104963919a5d1343dba2904675e7beefcc4d7033978af343afe76b4e7",
+      "after": "                 QUERY PLAN                  \n---------------------------------------------\n Aggregate\n   ->  Seq Scan on tenk1\n         Filter: (stringu1 = 'GRAAAA'::name)\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "8651bda831ca6bd8be7c4ad8410a5446886463f9ff5cd7223f8ae841d9e0a996",
+      "occurrence": 1,
+      "sql_line": 90,
+      "kind": "text_plan",
+      "before_sha256": "9732724d1132102ba2fe19439aa42122872d13f293e1ebf1a280cb32330daccd",
+      "after": "                     QUERY PLAN                      \n-----------------------------------------------------\n Sort\n   Output: (sp_parallel_restricted(unique1))\n   Sort Key: (sp_parallel_restricted(tenk1.unique1))\n   ->  Seq Scan on public.tenk1\n         Output: sp_parallel_restricted(unique1)\n         Filter: (tenk1.stringu1 = 'GRAAAA'::name)\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "409293652a2fd9465e8e86a6d001f9c72acd66c4567240c783962943c925850f",
+      "occurrence": 1,
+      "sql_line": 95,
+      "kind": "text_plan",
+      "before_sha256": "1638843df8193b2e6856f4d79dfd985aebbbdfad26430c7fc529e1913d3126b2",
+      "after": "              QUERY PLAN               \n---------------------------------------\n HashAggregate\n   Group Key: length((stringu1)::text)\n   ->  Seq Scan on tenk1\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "0fae28185b9ce3b31e71671b5f93f4fcb6376e6b83eed3954de751e022804e24",
+      "occurrence": 1,
+      "sql_line": 99,
+      "kind": "text_plan",
+      "before_sha256": "9ea089068ac8b1b9598ed5c29e63882ef303494b5fcf9e3987f0a29fbd0b9628",
+      "after": "          QUERY PLAN           \n-------------------------------\n Sort\n   Sort Key: stringu1\n   ->  HashAggregate\n         Group Key: stringu1\n         ->  Seq Scan on tenk1\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "290ad197e909a6ec1f9f784f460778f19aab507568f6d7676a808609943fee7d",
+      "occurrence": 1,
+      "sql_line": 104,
+      "kind": "text_plan",
+      "before_sha256": "9921731922d52bc67e409717c9f2190954a0d73a654e4852ed5303e22561de15",
+      "after": "                     QUERY PLAN                     \n----------------------------------------------------\n HashAggregate\n   Group Key: sp_parallel_restricted(unique1)\n   ->  Index Only Scan using tenk1_unique1 on tenk1\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "adef5d524b14a230271e22385117a1f33e685e9f5f90b169b10f4408d2803df9",
+      "occurrence": 1,
+      "sql_line": 110,
+      "kind": "text_plan",
+      "before_sha256": "b47afeabb58783d51670737ef895e72f987477cb4686d1af1aa675074b956a8a",
+      "after": "          QUERY PLAN           \n-------------------------------\n Aggregate\n   ->  Seq Scan on tenk1\n         Filter: (hundred > 1)\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "966c6bc5965e626e818647e38bc7fdfee50a0fa2b18d1ce038965be6c1f04e8b",
+      "occurrence": 1,
+      "sql_line": 116,
+      "kind": "text_plan",
+      "before_sha256": "60317b00df9fd940a0f3a8497b9f4850066f3088e39e1663944f63302656a038",
+      "after": "                                             QUERY PLAN                                             \n----------------------------------------------------------------------------------------------------\n Aggregate\n   ->  Seq Scan on tenk1\n         Filter: (NOT (ANY ((two = (hashed SubPlan 1).col1) AND (four = (hashed SubPlan 1).col2))))\n         SubPlan 1\n           ->  Seq Scan on tenk2\n                 Filter: (thousand > 100)\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "642e28d9be3199e550359900dcb57c153c15551c8fcdcd7d8ad0367eb755afb7",
+      "occurrence": 1,
+      "sql_line": 133,
+      "kind": "text_plan",
+      "before_sha256": "fd7d2d6dc69cd66872d8c0e8900e6f843a884450bb1b81fbf7cd341fafb53a37",
+      "after": "                  QUERY PLAN                   \n-----------------------------------------------\n Aggregate\n   InitPlan 1\n     ->  Aggregate\n           ->  Seq Scan on tenk2\n   ->  Seq Scan on tenk1\n         Filter: (unique1 = (InitPlan 1).col1)\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "fd1b8bd890dd27b2d37e4856139331d4a230312771763df7fcefc1c158fc2424",
+      "occurrence": 1,
+      "sql_line": 149,
+      "kind": "text_plan",
+      "before_sha256": "fb5a94e9f69d9c558e3c6c458183d777f956c9b88823f66dd788965f777bcdd2",
+      "after": "                  QUERY PLAN                   \n-----------------------------------------------\n Aggregate\n   ->  Index Scan using tenk1_hundred on tenk1\n         Index Cond: (hundred > 1)\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "9187a009e198375ccb4f6f746fddeab4afa9762c8f132f0b19898236da2c637d",
+      "occurrence": 1,
+      "sql_line": 154,
+      "kind": "text_plan",
+      "before_sha256": "c1a88f69eace7094c99017822a670bb63b10f46f47d789372005243930bbdb4f",
+      "after": "                       QUERY PLAN                        \n---------------------------------------------------------\n Aggregate\n   InitPlan 1\n     ->  Aggregate\n           ->  Function Scan on generate_series i\n   ->  Index Scan using tenk1_hundred on tenk1\n         Index Cond: (hundred = ANY ((InitPlan 1).col1))\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "0d1eb8e1f3a94f4523b1aca39884a2b76b67fc9d32f9b6fd6606cd09afe40bd9",
+      "occurrence": 1,
+      "sql_line": 161,
+      "kind": "text_plan",
+      "before_sha256": "5c2b34ef5e73d335b51f4ed9c56453cdc3cac1696a702c3b2e160eef13688d82",
+      "after": "                        QUERY PLAN                         \n-----------------------------------------------------------\n Aggregate\n   ->  Index Only Scan using tenk1_thous_tenthous on tenk1\n         Index Cond: (thousand > 95)\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "755a860e2d611554eb2e7018f6e5e27561dcd44b5358971e8cf44a7afd594a3a",
+      "occurrence": 1,
+      "sql_line": 168,
+      "kind": "text_plan",
+      "before_sha256": "bc86609cc4d0e3655d9b120765b63614f38ef37d6af1e988a360bc670ffcb6b4",
+      "after": "                     QUERY PLAN                      \n-----------------------------------------------------\n Nested Loop Left Join\n   ->  Values Scan on \"*VALUES*\"\n   ->  Aggregate\n         ->  Index Scan using tenk1_hundred on tenk1\n               Index Cond: (hundred > 10)\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "5eb472157ef418b4773ef25c48157aa9bcc1dea24ac617fe813fb9ee6e47550e",
+      "occurrence": 1,
+      "sql_line": 176,
+      "kind": "text_plan",
+      "before_sha256": "7a11086204a4e2109c3153cf8ee065afdd90a684994367df96b894bb0e5e61b0",
+      "after": "                           QUERY PLAN                            \n-----------------------------------------------------------------\n Nested Loop Left Join\n   ->  Values Scan on \"*VALUES*\"\n   ->  Aggregate\n         ->  Index Only Scan using tenk1_thous_tenthous on tenk1\n               Index Cond: (thousand > 99)\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "bed682e3a5c0a719ad96b9ecfaf558e1cf3668795c4c96ee8bb0aeba7b741d27",
+      "occurrence": 1,
+      "sql_line": 190,
+      "kind": "text_plan",
+      "before_sha256": "972122c94f9da42707cf6e4f4408d3b3a3a54269e60a43e0cc611e785e033cc4",
+      "after": "                         QUERY PLAN                         \n------------------------------------------------------------\n Aggregate\n   ->  Nested Loop Left Join\n         Join Filter: (tenk1.unique1 < (tenk2.unique1 + 1))\n         ->  Seq Scan on tenk1\n               Filter: (unique1 < 2)\n         ->  Limit\n               ->  Sort\n                     Sort Key: tenk2.unique1\n                     ->  Seq Scan on tenk2\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "edb2a5984d86baa8e7bdc24daf3fc5c3a2fe75ecfecd6d8fe2ed1606ba683762",
+      "occurrence": 1,
+      "sql_line": 221,
+      "kind": "text_plan",
+      "before_sha256": "296b4dda04ff9ba2c7efd2408ea20e6d6f867ec292d22bbc20225eded06a8094",
+      "after": "                      QUERY PLAN                      \n------------------------------------------------------\n Aggregate\n   ->  Nested Loop\n         ->  Seq Scan on tenk2\n               Disabled: true\n               Filter: (thousand = 0)\n         ->  Bitmap Heap Scan on tenk1\n               Recheck Cond: (hundred > 1)\n               ->  Bitmap Index Scan on tenk1_hundred\n                     Index Cond: (hundred > 1)\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "357671d42d58a5f9367e9483697a7b6eafa145b2b1ffe9fb972c4488c5773a3d",
+      "occurrence": 1,
+      "sql_line": 233,
+      "kind": "text_plan",
+      "before_sha256": "7be247e466470e2ca1aea944df6a87a7c791000e15da1b8d059cef1df7e067bd",
+      "after": "                          QUERY PLAN                          \n--------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=1)\n   ->  Nested Loop (actual rows=98000.00 loops=1)\n         ->  Seq Scan on tenk2 (actual rows=10.00 loops=1)\n               Filter: (thousand = 0)\n               Rows Removed by Filter: 9990\n         ->  Seq Scan on tenk1 (actual rows=9800.00 loops=10)\n               Filter: (hundred > 1)\n Gravity: driver road, 3 pipelines, 3 sites\n   p0  emit\n   p1  serial (Host@1)\n   p2  emit (NoDrivingSite)\n   Program: admitted, shape GRAPH\n(12 rows)\n"
+    },
+    {
+      "sql_sha256": "47777481ebdfec9bcdf82a9a99bdf76295fa8f10de434321d8c68785abf5f376",
+      "occurrence": 1,
+      "sql_line": 255,
+      "kind": "text_plan",
+      "before_sha256": "4e31ce7ff72ee8bd9acce0c84c7e9353fb32255ba9b0746757d727451ec360f5",
+      "after": "                 explain_parallel_sort_stats                  \n--------------------------------------------------------------\n Nested Loop Left Join (actual rows=30000.00 loops=1)\n   ->  Values Scan on \"*VALUES*\" (actual rows=3.00 loops=1)\n   ->  Sort (actual: not counted)\n         Sort Key: tenk1.ten\n         ->  Seq Scan on tenk1 (actual rows=10000.00 loops=1)\n               Filter: (ten < 100)\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "c7cd0efe4e58ea1215ba4914a61113776c55ec74adf1c57d297adfc89de3eec7",
+      "occurrence": 1,
+      "sql_line": 269,
+      "kind": "text_plan",
+      "before_sha256": "cfc3806ff483ce19a714511c8de2932a13349d6930bd37784972c91ed80c6b1c",
+      "after": "                        QUERY PLAN                        \n----------------------------------------------------------\n Aggregate\n   ->  Merge Join\n         Merge Cond: (tenk1.unique1 = tenk2.unique1)\n         ->  Index Only Scan using tenk1_unique1 on tenk1\n         ->  Index Only Scan using tenk2_unique1 on tenk2\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "4ad7e1a670b941cce30cc121307baa146be308d3348f723dc957f14597aa9c17",
+      "occurrence": 1,
+      "sql_line": 278,
+      "kind": "text_plan",
+      "before_sha256": "137dadce95e46740cbd1cb3c62411d3e2782b5d900269fc6af8bdd8e71d0089b",
+      "after": "            QUERY PLAN            \n----------------------------------\n Nested Loop\n   Join Filter: (t1.two > t2.two)\n   ->  Seq Scan on tenk1 t1\n   ->  Materialize\n         ->  Seq Scan on tenk2 t2\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "6fe21c77213328aba26a13a30618b5c16ecc4d32a59ff01bb68a41bfcaf4d85b",
+      "occurrence": 1,
+      "sql_line": 283,
+      "kind": "text_plan",
+      "before_sha256": "60eeeb2a34916590ebb9bbf9d4b5c257262a895f941d9a08615e7c029fdf11e7",
+      "after": "             QUERY PLAN             \n------------------------------------\n Nested Loop\n   ->  Seq Scan on tenk1 t1\n   ->  Subquery Scan on t2\n         Filter: (t1.two > t2.two)\n         ->  Seq Scan on tenk2 t2_1\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "b0756eb14d1ed17ceb006dae3faf5df9c12654b81a87b91cea40fb2d3d50a525",
+      "occurrence": 1,
+      "sql_line": 294,
+      "kind": "text_plan",
+      "before_sha256": "abef65749901536c5e796a588381e794c72b135d87b885913b3ca523f8e9a064",
+      "after": "          QUERY PLAN           \n-------------------------------\n GroupAggregate\n   Group Key: twenty\n   ->  Sort\n         Sort Key: twenty\n         ->  Seq Scan on tenk1\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "95ff76856f7b9c11bbc4e956a5275a6347810c49ec07b6f606a8b541ee336594",
+      "occurrence": 1,
+      "sql_line": 307,
+      "kind": "text_plan",
+      "before_sha256": "ce5a589db2d66e75c3c4a29c66137b1a7601f7fe48fed205a4926a28db6b22c8",
+      "after": "               QUERY PLAN                \n-----------------------------------------\n Result\n   Output: ten, sp_simple_func(ten)\n   ->  Sort\n         Output: ten\n         Sort Key: tenk1.ten\n         ->  Seq Scan on public.tenk1\n               Output: ten\n               Filter: (tenk1.ten < 100)\n(8 rows)\n"
+    },
+    {
+      "sql_sha256": "7b6589217495b409480ba9a4bd6fb5dfbbd2c39f44ea548999b677e89aa8a206",
+      "occurrence": 1,
+      "sql_line": 314,
+      "kind": "text_plan",
+      "before_sha256": "d330c79d820be9ba59c9cbb0c70db14904272dbe296949856bd262a2b4329b15",
+      "after": "             QUERY PLAN              \n-------------------------------------\n ProjectSet\n   ->  GroupAggregate\n         Group Key: twenty\n         ->  Sort\n               Sort Key: twenty\n               ->  Seq Scan on tenk1\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "b0756eb14d1ed17ceb006dae3faf5df9c12654b81a87b91cea40fb2d3d50a525",
+      "occurrence": 2,
+      "sql_line": 322,
+      "kind": "text_plan",
+      "before_sha256": "abef65749901536c5e796a588381e794c72b135d87b885913b3ca523f8e9a064",
+      "after": "          QUERY PLAN           \n-------------------------------\n GroupAggregate\n   Group Key: twenty\n   ->  Sort\n         Sort Key: twenty\n         ->  Seq Scan on tenk1\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "48536d46c541198c58ae703630050dda815f65c764db6c054bade09d3af0e1a1",
+      "occurrence": 1,
+      "sql_line": 332,
+      "kind": "text_plan",
+      "before_sha256": "a448541a3c4db88b51cedbc7ab9a1dbfb789f0904e5ae168157c86d5f782f767",
+      "after": "              QUERY PLAN               \n---------------------------------------\n Nested Loop Left Join\n   ->  Values Scan on \"*VALUES*\"\n   ->  GroupAggregate\n         Group Key: tenk1.string4\n         ->  Sort\n               Sort Key: tenk1.string4\n               ->  Seq Scan on tenk1\n(7 rows)\n"
+    },
+    {
+      "sql_sha256": "8fb5101202a4bb588379517a9191754c02218bbc505eea222cd0e85a82ef70a1",
+      "occurrence": 1,
+      "sql_line": 348,
+      "kind": "text_plan",
+      "before_sha256": "eaba3da84ce3c4e78075cd5456e409488f3319df216f6ce85479ced42dbb5242",
+      "after": "                     QUERY PLAN                     \n----------------------------------------------------\n Aggregate\n   ->  Index Only Scan using tenk1_unique1 on tenk1\n(2 rows)\n"
+    },
+    {
+      "sql_sha256": "9ddf1050f35534b20c5e32888b8fbc3e216d691a1a083ac4d84cb8dc2fcaf45f",
+      "occurrence": 1,
+      "sql_line": 354,
+      "kind": "text_plan",
+      "before_sha256": "9a2fab5fb0dce3634bf37b5a14d838fe58de5927d7401ad27c5b3943788adf83",
+      "after": "          QUERY PLAN           \n-------------------------------\n Limit\n   ->  Sort\n         Sort Key: fivethous\n         ->  Seq Scan on tenk1\n(4 rows)\n"
+    },
+    {
+      "sql_sha256": "495cb2a454415b3d30eb2b0ea2fa37c8dbd555744b6216734de5564c6f284261",
+      "occurrence": 1,
+      "sql_line": 361,
+      "kind": "text_plan",
+      "before_sha256": "01a4fd6de57230bcf3007c9420866affdfc9239b7371c08280fbe0048c464a7c",
+      "after": "          QUERY PLAN           \n-------------------------------\n Limit\n   ->  Sort\n         Sort Key: string4\n         ->  Seq Scan on tenk1\n(4 rows)\n"
+    },
+    {
+      "sql_sha256": "495cb2a454415b3d30eb2b0ea2fa37c8dbd555744b6216734de5564c6f284261",
+      "occurrence": 2,
+      "sql_line": 369,
+      "kind": "text_plan",
+      "before_sha256": "01a4fd6de57230bcf3007c9420866affdfc9239b7371c08280fbe0048c464a7c",
+      "after": "          QUERY PLAN           \n-------------------------------\n Limit\n   ->  Sort\n         Sort Key: string4\n         ->  Seq Scan on tenk1\n(4 rows)\n"
+    },
+    {
+      "sql_sha256": "0f2eed5d9f0f796e39ec01d2b93ea360b945ea6f891e36dc03b0ec50bcbf6603",
+      "occurrence": 1,
+      "sql_line": 380,
+      "kind": "text_plan",
+      "before_sha256": "e6e77f7917642d61ccc543a670b64b6298084cbd794188991c428da4c7de31c0",
+      "after": "                       QUERY PLAN                        \n---------------------------------------------------------\n Sort\n   Sort Key: hundred, (parallel_safe_volatile(thousand))\n   ->  Seq Scan on tenk1\n         Filter: (four = 2)\n(4 rows)\n"
+    },
+    {
+      "sql_sha256": "0f2eed5d9f0f796e39ec01d2b93ea360b945ea6f891e36dc03b0ec50bcbf6603",
+      "occurrence": 2,
+      "sql_line": 388,
+      "kind": "text_plan",
+      "before_sha256": "f5cbc24c4bb9d86dbc400091c5d05bb02572d94333aa7e26970b2fd84cc36801",
+      "after": "                       QUERY PLAN                        \n---------------------------------------------------------\n Incremental Sort\n   Sort Key: hundred, (parallel_safe_volatile(thousand))\n   Presorted Key: hundred\n   ->  Index Scan using tenk1_hundred on tenk1\n         Filter: (four = 2)\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "0c43d21f8241f254d249aec7e276750a8aab8078bb97921a8e1176b57525f694",
+      "occurrence": 1,
+      "sql_line": 396,
+      "kind": "text_plan",
+      "before_sha256": "148353e5a3dc4fd23c4ddd71398ff196a44145016f0d17d39d2531b8dbdb8b17",
+      "after": "                    QUERY PLAN                    \n--------------------------------------------------\n HashAggregate\n   Group Key: twenty, parallel_safe_volatile(two)\n   ->  Seq Scan on tenk1\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "13a6a321bd7243f19e11e8d448e0b758cc5aec13c304855e08b24cf9643fff85",
+      "occurrence": 1,
+      "sql_line": 404,
+      "kind": "text_plan",
+      "before_sha256": "49b3436a6d2b03762eb0664a87333589c4797a1d6201b7ee22166c6b7393f544",
+      "after": "               QUERY PLAN                \n-----------------------------------------\n Index Scan using tenk1_unique1 on tenk1\n   Index Cond: (unique1 = 1)\n(2 rows)\n"
+    },
+    {
+      "sql_sha256": "e7b98b4decc6fe7e6b93e12fe0eb9a1c68f31e4ee8f812dc15dffff0d911e6bf",
+      "occurrence": 1,
+      "sql_line": 440,
+      "kind": "text_plan",
+      "before_sha256": "98998c90f135e7af7e971880d066ce411569d159717f8bc5678944c64574990a",
+      "after": "                                    QUERY PLAN                                     \n-----------------------------------------------------------------------------------\n Aggregate\n   Output: count(*)\n   ->  Hash Right Semi Join\n         Hash Cond: ((b.unique1 = a.unique1) AND ((row_number() OVER w1) = a.two))\n         ->  WindowAgg\n               Output: b.unique1, row_number() OVER w1\n               Window: w1 AS (ROWS UNBOUNDED PRECEDING)\n               ->  Index Only Scan using tenk1_unique1 on public.tenk1 b\n                     Output: b.unique1\n         ->  Hash\n               Output: a.unique1, a.two\n               ->  Seq Scan on public.tenk1 a\n                     Output: a.unique1, a.two\n(13 rows)\n"
+    },
+    {
+      "sql_sha256": "13f7c7ecedc23b7fe158cf0e91dbe3e90646e50b7eec25a71a6750045ade1ea2",
+      "occurrence": 1,
+      "sql_line": 446,
+      "kind": "text_plan",
+      "before_sha256": "6148db38e6b117410d5c1c685fed2a16b18d1d5f1856c433011e3b9ad9cae19a",
+      "after": "                       QUERY PLAN                        \n---------------------------------------------------------\n Hash Semi Join\n   Hash Cond: (a.two = b.two)\n   ->  Seq Scan on tenk1 a\n   ->  Hash\n         ->  Limit\n               ->  Seq Scan on tenk1 b\n                     Filter: (stringu1 ~~ '%AAAA'::text)\n(7 rows)\n"
+    },
+    {
+      "sql_sha256": "d7b1a2d023a9e73c4896e43a501dddcf742c5e41b3eb3fe6331f836b4e003a1c",
+      "occurrence": 1,
+      "sql_line": 453,
+      "kind": "text_plan",
+      "before_sha256": "e313c589f2e6077266e8ff152675df8131bc8fd6def4e3832b316e0ff03193b4",
+      "after": "                    QUERY PLAN                    \n--------------------------------------------------\n Seq Scan on tenk1 (actual rows=10000.00 loops=1)\n(1 row)\n"
+    },
+    {
+      "sql_sha256": "04132d260749d8e647804da6e7a925b0868e58dd4d0ca7d80e23622b1a02a3f1",
+      "occurrence": 1,
+      "sql_line": 469,
+      "kind": "text_plan",
+      "before_sha256": "1e64218d70a6b4bf9a3c3fbf5f300697061c572187bb5de084698ae500261972",
+      "after": "                  QUERY PLAN                  \n----------------------------------------------\n Append\n   ->  Seq Scan on tenk1\n         Filter: (fivethous = (tenthous + 1))\n   ->  Seq Scan on tenk1 tenk1_1\n         Filter: (fivethous = (tenthous + 1))\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "8229a313348df0a55deffb519b5d9273d5e691c042754c7d98d4f96af573fe9f",
+      "occurrence": 1,
+      "sql_line": 476,
+      "kind": "text_plan",
+      "before_sha256": "ff1a51e316127161a350f1e5a654f93975fd6d6e658ac5bcf4ee4cfa30a3f04c",
+      "after": "                      QUERY PLAN                       \n-------------------------------------------------------\n Sort\n   Sort Key: tenk1.unique1\n   ->  Append\n         ->  Seq Scan on tenk1\n               Filter: (fivethous = (InitPlan 1).col1)\n               InitPlan 1\n                 ->  Limit\n                       ->  Seq Scan on tenk1 tenk1_2\n                             Filter: (fivethous = 1)\n         ->  Seq Scan on tenk1 tenk1_1\n               Filter: (fivethous = (InitPlan 2).col1)\n               InitPlan 2\n                 ->  Limit\n                       ->  Seq Scan on tenk1 tenk1_3\n                             Filter: (fivethous = 1)\n(15 rows)\n"
+    },
+    {
+      "sql_sha256": "142209953e74e065ad822c32e5a7a555c8bc9136487f0c534d33cbfe7b87ec59",
+      "occurrence": 1,
+      "sql_line": 488,
+      "kind": "text_plan",
+      "before_sha256": "84e55eae98fdf37d55116ea0d48bb56571d5c78e069f3bfedf653d51f71b8cfd",
+      "after": "                                QUERY PLAN                                 \n---------------------------------------------------------------------------\n ProjectSet\n   Output: generate_series(1, tenk1.two), ARRAY(SubPlan 1), tenk1.tenthous\n   ->  Result\n         Output: tenk1.two, tenk1.tenthous\n         ->  Sort\n               Output: tenk1.tenthous, tenk1.two\n               Sort Key: tenk1.tenthous\n               ->  Seq Scan on public.tenk1\n                     Output: tenk1.tenthous, tenk1.two\n   SubPlan 1\n     ->  ProjectSet\n           Output: generate_series(1, tenk1.two)\n           ->  Result\n(13 rows)\n"
+    },
+    {
+      "sql_sha256": "d02eb23fd58963325a245033f39a8aae82b53446ff7ddb4ab09185dfb8ae792d",
+      "occurrence": 1,
+      "sql_line": 493,
+      "kind": "text_plan",
+      "before_sha256": "c9a0d50558860bf9eca3ae3b6b69481077eee9398b1f81a0316a9d52d72561a5",
+      "after": "                                      QUERY PLAN                                      \n--------------------------------------------------------------------------------------\n Sort\n   Output: (((unnest('{}'::integer[])) + 1))\n   Sort Key: (((unnest('{}'::integer[])) + 1))\n   ->  Result\n         Output: ((unnest('{}'::integer[])) + 1)\n         ->  ProjectSet\n               Output: unnest('{}'::integer[])\n               ->  Nested Loop\n                     ->  Index Only Scan using tenk1_hundred on public.tenk1 t1\n                           Output: t1.hundred\n                     ->  Materialize\n                           ->  Index Only Scan using tenk1_hundred on public.tenk1 t2\n(12 rows)\n"
+    },
+    {
+      "sql_sha256": "a061c1a38aead1fe5f2cdfa8e02e9cf11dbb203f08b302f001fff4b060acd343",
+      "occurrence": 1,
+      "sql_line": 510,
+      "kind": "text_plan",
+      "before_sha256": "acad3d6a6ab2122071291caae730931505ef9a8ec86a171ffb0043804c1a10c7",
+      "after": "                         QUERY PLAN                         \n------------------------------------------------------------\n Seq Scan on fooarr\n   Filter: ((f1 = '1'::text) AND (f2 = '{1,2}'::integer[]))\n(2 rows)\n"
+    },
+    {
+      "sql_sha256": "a0abe2c209d8f5916f2fbd764201c7c0f26af06f5eda3abd7a50677a0ee97af4",
+      "occurrence": 1,
+      "sql_line": 516,
+      "kind": "text_plan",
+      "before_sha256": "014fa92102ff5e88a0df4f4d66facc7c4c4d973fefd603f4fd71fb4299cdcdc6",
+      "after": "                     QUERY PLAN                      \n-----------------------------------------------------\n Subquery Scan on tenk1_vw_sec\n   Filter: ((SubPlan 1) < 100)\n   ->  Index Only Scan using tenk1_unique1 on tenk1\n   SubPlan 1\n     ->  Aggregate\n           ->  Seq Scan on int4_tbl\n                 Filter: (f1 < tenk1_vw_sec.unique1)\n(7 rows)\n"
+    },
+    {
+      "sql_sha256": "e6677f142c3b8019288c6e194e52413f0a65d001117ef6c4910eb7a2a731e8c7",
+      "occurrence": 1,
+      "sql_line": 587,
+      "kind": "postgres_worker_activity",
+      "before_sha256": "a459b6f96519690d4695d35e38f632dd234a22124d93affaaf8425ba331f740d",
+      "after": " wrk_to_launch | wrk_launched \n---------------+--------------\n f             | f\n(1 row)\n"
+    }
+  ]
+}

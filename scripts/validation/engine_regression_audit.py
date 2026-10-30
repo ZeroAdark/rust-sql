@@ -15,6 +15,7 @@ from choice_witness import POLICY as CHOICE_POLICY
 from diagnostic_policy import POLICY as DIAGNOSTIC_POLICY
 from diagnostic_policy import STATISTIC_KINDS
 from aggregate_strategy import POLICY as AGGREGATE_POLICY
+from worker_context import POLICY as WORKER_POLICY
 
 
 def audit(fixtures, reference, candidate, profiles, output):
@@ -97,6 +98,7 @@ def main():
                   diagnostic_policy_sha256=digest(read(DIAGNOSTIC_POLICY)),
                   choice_policy_sha256=digest(read(CHOICE_POLICY)),
                   aggregate_strategy_policy_sha256=digest(read(AGGREGATE_POLICY)),
+                  worker_context_policy_sha256=digest(read(WORKER_POLICY)),
                   raw_candidate_verdict=candidate["passed"])
     (args.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({k: v for k, v in report.items() if k != "cases"}, indent=2))

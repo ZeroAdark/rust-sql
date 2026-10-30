@@ -1,10 +1,12 @@
 """Prove pinned SQL choices directly against their captured result tables.
 
 This is not a general geometric/JSON normalizer. Unknown source or SQL hashes,
-finite-distance reordering, changed values, duplicate loss and error text remain
+finite-distance reordering, changed ordinary values, duplicate loss and primary errors remain
 strict. Each proof uses expected O(rows) work and at most O(rows) storage.
 The separate aggregate-strategy witness handles one deliberately inconsistent
 regression helper; it never grants an exception to ordinary aggregate results.
+The worker-context witness permits only two pinned execution-site omissions,
+preserving the complete primary message and SQL-function context.
 """
 from collections import Counter
 from functools import lru_cache
@@ -14,6 +16,7 @@ from pathlib import Path
 
 from compare_regression import columns, find_anchor, physical_lines, statements, table
 from aggregate_strategy import compare_aggregate_strategy
+from worker_context import compare_worker_context
 
 
 POLICY = Path(__file__).resolve().parents[2] / "regress/engine-profile/policy/choices.json"
@@ -131,6 +134,8 @@ def eol(line):
 
 def compare_choices(source, expected, actual):
     actual, strategy_proofs = compare_aggregate_strategy(source, expected, actual)
+    actual, worker_proofs = compare_worker_context(source, expected, actual)
+    strategy_proofs.extend(worker_proofs)
     entry = policy().get(digest(source))
     if entry is None or entry["expected_sha256"] != digest(expected):
         return actual, strategy_proofs
