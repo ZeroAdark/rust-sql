@@ -59,11 +59,13 @@ def latency_summary(values):
                                     for p in (50, 95, 99)}, 'max_ms': ordered[-1] / 1e6}
 
 
-def setup(connection, rows, clients):
+def setup(connection, rows, clients, *, reference=False):
     connection.execute('CREATE TABLE bench_accounts(id integer PRIMARY KEY,balance bigint NOT NULL)')
     connection.execute('INSERT INTO bench_accounts SELECT i,0 FROM generate_series(1,%s) g(i)', (clients * 20000,))
-    connection.execute('CREATE ACCESS METHOD pgrcolumnar TYPE TABLE HANDLER heap_tableam_handler')
-    connection.execute('CREATE TABLE bench_facts(id integer,g integer,v integer) USING pgrcolumnar')
+    if not reference:
+        connection.execute('CREATE ACCESS METHOD pgrcolumnar TYPE TABLE HANDLER heap_tableam_handler')
+    access = 'heap' if reference else 'pgrcolumnar'
+    connection.execute(f'CREATE TABLE bench_facts(id integer,g integer,v integer) USING {access}')
     connection.execute('INSERT INTO bench_facts SELECT i,i%%128,(i*17)%%1000 FROM generate_series(1,%s) g(i)', (rows,))
     connection.execute('CREATE TABLE bench_dim(g integer PRIMARY KEY,region integer)')
     connection.execute('INSERT INTO bench_dim SELECT i,i%8 FROM generate_series(0,127) g(i)')
@@ -75,7 +77,7 @@ def setup(connection, rows, clients):
     connection.execute('CHECKPOINT')
 
 
-def exercise(dsn, group, rows, clients, bundles, warmup):
+def exercise(dsn, group, rows, clients, bundles, warmup, *, bundle_rate=None):
     import psycopg
     from psycopg.conninfo import make_conninfo
     oracle = {'aggregate': grouped(1, rows, 128), 'join': grouped(1, rows, 8)}
@@ -134,10 +136,16 @@ def exercise(dsn, group, rows, clients, bundles, warmup):
                 if not begin.wait(180):
                     raise TimeoutError('measurement start not received')
                 started = time.monotonic_ns()
+                schedule_lag = array('Q')
+                interval_ns = round(clients * 1e9 / bundle_rate) if bundle_rate else 0
                 for number in range(warmup, warmup + bundles):
+                    if interval_ns:
+                        due = started + (number - warmup) * interval_ns + client * interval_ns // clients
+                        time.sleep(max(0, (due - time.monotonic_ns()) / 1e9))
+                        schedule_lag.append(max(0, time.monotonic_ns() - due))
                     bundle(number, True)
                 ended = time.monotonic_ns()
-                complete.put({'client': client, 'passed': True, 'start_ns': started, 'end_ns': ended, 'timings': timings})
+                complete.put({'client': client, 'passed': True, 'start_ns': started, 'end_ns': ended, 'timings': timings, 'schedule_lag': schedule_lag})
                 if not release.wait(180):
                     raise TimeoutError('measurement release not received')
         except Exception as error:
@@ -155,11 +163,13 @@ def exercise(dsn, group, rows, clients, bundles, warmup):
         if not all(item['passed'] for item in warm):
             raise AssertionError(warm)
         before = snapshot(group)
+        client_before = snapshot(group.parent / 'driver')
         sampler.start()
         started = time.monotonic_ns()
         begin.set()
         results = [complete.get(timeout=600) for _ in workers]
         after = snapshot(group)
+        client_after = snapshot(group.parent / 'driver')
         sampled = sampler.stop()
         if not all(item['passed'] for item in results):
             raise AssertionError(results)
@@ -189,6 +199,9 @@ def exercise(dsn, group, rows, clients, bundles, warmup):
             'fact_rows': rows, 'elapsed_seconds': elapsed, 'bundles_per_second': clients * bundles / elapsed,
             'server_cpu_seconds': cpu['usage_usec'] / 1e6,
             'server_cpu_us_per_bundle': cpu['usage_usec'] / (clients * bundles),
+            'offered_bundles_per_second': bundle_rate,
+            'schedule_lag': latency_summary([v for r in results for v in r['schedule_lag']]) if bundle_rate else None,
+            'client_cpu_delta': delta(client_before['cpu'], client_after['cpu']),
             'cpu_delta': cpu, 'memory_event_delta': events, 'resource_before': before, 'resource_after': after,
             'sampled_resources': sampled, 'latency': measured, 'warmup': warm}
 

@@ -1,0 +1,261 @@
+{
+  "run": {
+    "id": 41124599897,
+    "head_sha": "249541b2fef6f59d96f3081df631a0aee391e398",
+    "status": "completed",
+    "conclusion": "success",
+    "html_url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41124599897",
+    "created_at": "2026-10-30T20:36:40Z",
+    "updated_at": "2026-10-30T21:09:12Z"
+  },
+  "jobs": [
+    {
+      "name": "dependencies",
+      "id": 124299740444,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41124599897/job/124299740444",
+      "started_at": "2026-10-30T20:36:43Z",
+      "completed_at": "2026-10-30T20:40:52Z",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run rustup toolchain install 1.96.0 --profile minimal",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo install cargo-audit --version 0.22.2 --locked -j 2",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo audit --deny warnings --json > dependency-audit.json",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "unit",
+      "id": 124299740754,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41124599897/job/124299740754",
+      "started_at": "2026-10-30T20:36:43Z",
+      "completed_at": "2026-10-30T20:38:02Z",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run rustup toolchain install 1.96.0 --profile minimal",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked -j 2 -p gravity_program -p pgsync -p lmgr_proc",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p pagepool --features global --test frames --test idle_handoff --test idle_fallback",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run python3 -m py_compile scripts/validation/*.py",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run python3 artifacts/validation/pressure-correctness-2026-10-30/replay.py",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run python3 -m unittest discover -s scripts/validation -p 'test_*.py'",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "server",
+      "id": 124299740783,
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41124599897/job/124299740783",
+      "started_at": "2026-10-30T20:36:43Z",
+      "completed_at": "2026-10-30T21:09:12Z",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run sudo apt-get update && sudo apt-get install -y build-essential pkg-config libre2-dev clang lld libssl-dev libicu-dev postgresql-client python3-psycopg bison flex zlib1g-dev locales",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run sudo localedef -i en_US -f UTF-8 en_US.UTF-8",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run rustup toolchain install 1.96.0 --profile minimal",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo build --locked --release -j 2 -p main_main -p initdb",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p gravity_lowerv4 --lib",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p inval --lib",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p compression -p basebackup_compress -p pgrc_codec -p xlogreader -p xloginsert -p parquet_read --lib",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p gravity_wasm --test gravity_wasm_suite",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build the pinned PostgreSQL reference separately",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Differential SQL and whole-process crash/restore checks",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Server authentication, TLS and certificate rotation",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run ulimit -s 65520",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native PostgreSQL regression control",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Capture strict PostgreSQL regression expectations",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Reviewed engine regression contract",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build separately patched PostgreSQL window control",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Independent window-frame oracle against declared upstream fix",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ]
+}

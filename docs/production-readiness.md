@@ -2,7 +2,7 @@
 
 Status: NOT QUALIFIED. Qualification applies to an exact commit, binary, configuration, architecture and workload. These are acceptance criteria, not a declaration that the gates have passed.
 
-Priority: reduce CPU cost first, while preserving correctness and latency. Memory is a secondary optimization target with explicit operating limits. Report increased metadata, cache capacity and peak RSS alongside CPU savings; do not reject an effective CPU optimization solely because its bounded metadata grows.
+Priority: preserve the measured CPU, throughput and analytical-latency gains over native PostgreSQL while bringing server memory (including charged cache), process PSS, point-read p99 and committed-update p99 to PostgreSQL levels or better under the same workload. Native PostgreSQL is the benchmark baseline. Every candidate must retain SQL/protocol correctness and acknowledged durability, and repeated paired trials must show that improvements in these four metrics do not sacrifice the other measured gains. Prefer O(1) or O(log n) data structures; any necessary linear work must be bounded and kept off hot paths where possible.
 
 | Gate | Required evidence | Current scope |
 | --- | --- | --- |
@@ -24,7 +24,10 @@ The subsequent [small-run page-policy experiment](performance.md#sparse-small-ru
 
 The [idle allocator change](idle-allocator.md) now passes a fresh forty-trial matrix, with all throughput/p99 changes inside 5%, and reduces median 4 GiB connection-burst peak memory by 21.59%. Three two-wave 2 GiB pilots pass with 183.62 MiB minimum headroom. CPU is reported with paired distributions and shutdown cleanup; this is not a general CPU-speedup or production-capacity claim. Fresh SQL, isolation, idle-session, TLS, window-oracle and recovery checks bind to the final binary. Baseline OOM failures and rejected/superseded candidates remain in the [evidence archive](../artifacts/validation/allocator-idle-reuse-2026-10-30/README.md).
 
-The [connection churn and physical spill evidence](../artifacts/validation/pressure-correctness-2026-10-30/README.md) retains 160,000 accepted startups, exact committed-data/restart checks, real spill witnesses and cleanup after limits/cancellation. The million-row 1 GiB watchdog failure remains a qualification blocker even though subsequent runs pass. No server change or new CPU-speedup claim accompanies these probes.
+The [connection churn and physical spill evidence](../artifacts/validation/pressure-correctness-2026-10-30/README.md) retains 160,000 accepted startups, exact committed-data/restart checks, real spill witnesses and cleanup after limits/cancellation. The million-row 1 GiB watchdog failure remains a qualification blocker. Longer repeated sorts subsequently caused a kernel OOM kill on the published runtime; an attempted early-free-pool patch also failed and was reverted. The [sustained pressure traces](../artifacts/validation/pool-pressure-2026-10-30/README.md) preserve those failures and an ignored warm-reserve setting discovered during diagnosis. No server change or new CPU-speedup claim accompanies these probes.
+
+The [allocator startup-setting fix](../artifacts/validation/pool-config-startup-2026-10-30/README.md) applies the warm-reserve maximum and host-pressure age before the allocator copies its immutable configuration. Three runs each at requested 16/64 MiB maxima complete 72 wide sorts under 1 GiB without cancellations or OOM kills, and the observed targets respect the requests. Six unfixed controls exceed their requested limits and are rejected. Default settings are unchanged; CPU/latency qualification of a smaller reserve and broader pressure qualification remain required.
+
 
 ## Acceptance policy
 

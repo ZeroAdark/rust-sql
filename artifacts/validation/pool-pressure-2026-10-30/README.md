@@ -1,0 +1,15 @@
+# Sustained pool-pressure investigation — 2026-10-30
+
+This investigation reproduces a production blocker, rejects an attempted fix, and identifies an ineffective startup setting. It claims no performance improvement or production qualification.
+
+Six alternating published-runtime/experimental trials run twelve back-to-back million-row full sorts under a private 1 GiB cgroup. Work_mem alternates between 64 kB with parallel workers disabled and 16 MiB with a worker limit of two. Every successful COPY is hashed against an independent expected result. Queries stream all four columns, including a 128-byte payload. The monitor samples cgroup memory every 25 ms, and query boundaries capture allocator ownership. This is diagnostic instrumentation, not the benchmark comparison against PostgreSQL.
+
+The published runtime completes two trials and is OOM-killed in one. The experimental patch completes none: one trial has a watchdog cancellation, and two are OOM-killed. The patch applied the existing ladder margin to background prefault headroom and asked the purger to return free pool memory before cancellation. It has been reverted; its frozen source patch, binary hash, build log and 187-passing-policy-test log remain in this archive. Unit success did not establish runtime safety.
+
+A failing experimental run grows from about 747 MiB anonymous memory to 1009 MiB in 106 ms. Query-boundary attribution includes a 256 MiB warm-zero reserve. The periodic watchdog cannot reliably keep that burst below the cap. The existing thresholds and durability settings remain enabled.
+
+Six further trials request 16 MiB or 64 MiB maximum warm reserves via PGRUST_MEMPOLICY. These are INVALID as reduced-reserve experiments: the actual target still grows to 256 MiB. Four are OOM-killed and two end with cancellations. The historical label `no-prefault` requests a 16 MiB maximum; it does not disable prefaulting, and the maximum was ignored. Source inspection found that the allocator constructor omitted PoolWarmZeroMax and PoolHostAgeMs from the settings applied before copying the pool's immutable configuration. Postmaster policy initialization occurs too late. These failed configuration experiments motivated a separate constructor fix and fresh-process test, whose eventual runtime results must be recorded separately.
+
+Every private server group is empty afterward. The files retain abnormal shutdowns, kernel OOM counters, SQL errors and commands; a failed trial is never counted as success. The last requested-reserve trial overlapped compilation and is useful only for correctness/configuration diagnosis. No CPU, throughput or latency comparison is made here.
+
+The archive includes twelve reports, frozen harnesses, logs, configurations and controller invocations. Binary hashes distinguish the published runtime (5c1049ca...) and rejected headroom runtime (3ea8082d...). `manifest.json` hashes every member and the archive; `results.json` summarizes outcomes and observed targets. The workload/rate benchmark against native PostgreSQL is documented separately in [the native comparison](../postgresql-comparison-2026-10-30/README.md).

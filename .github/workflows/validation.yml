@@ -25,6 +25,7 @@ jobs:
       - run: cargo test --locked --release -j 2 -p pagepool --features global --test frames --test idle_handoff --test idle_fallback
       - run: python3 -m py_compile scripts/validation/*.py
       - run: python3 artifacts/validation/pressure-correctness-2026-10-30/replay.py
+      - run: python3 artifacts/validation/postgresql-comparison-2026-10-30/replay.py
       - run: python3 -m unittest discover -s scripts/validation -p 'test_*.py'
       - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -55,6 +56,7 @@ jobs:
       - run: sudo localedef -i en_US -f UTF-8 en_US.UTF-8
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: cargo build --locked --release -j 2 -p main_main -p initdb
+      - run: cargo test --locked --release -j 2 -p main_main --bin postgres allocator_constructor_honors_warm_limit_and_host_age
       - run: cargo test --locked --release -j 2 -p gravity_lowerv4 --lib
       - run: cargo test --locked --release -j 2 -p inval --lib
       - run: 'cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::'

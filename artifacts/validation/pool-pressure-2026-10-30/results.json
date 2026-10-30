@@ -1,0 +1,205 @@
+{
+  "production_qualified": false,
+  "headroom_patch_accepted": false,
+  "trials": [
+    {
+      "name": "pool-headroom-baseline-1",
+      "passed": false,
+      "completed_queries": 4,
+      "attempted_queries": 7,
+      "shutdown_exit_codes": [
+        -9
+      ],
+      "oom_group_kill": 1,
+      "sqlstate_errors": [
+        "53200",
+        "53200",
+        null
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": true
+    },
+    {
+      "name": "pool-headroom-candidate-1",
+      "passed": false,
+      "completed_queries": 11,
+      "attempted_queries": 12,
+      "shutdown_exit_codes": [
+        0
+      ],
+      "oom_group_kill": 0,
+      "sqlstate_errors": [
+        "53200"
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "3ea8082d1a7baed27b4c7bdc4c0ce1dec1eddc764765cf63ded43d7a8f8c9e43",
+      "configuration_override_valid": true
+    },
+    {
+      "name": "pool-headroom-candidate-2",
+      "passed": false,
+      "completed_queries": 5,
+      "attempted_queries": 6,
+      "shutdown_exit_codes": [
+        -9
+      ],
+      "oom_group_kill": 1,
+      "sqlstate_errors": [
+        null
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "3ea8082d1a7baed27b4c7bdc4c0ce1dec1eddc764765cf63ded43d7a8f8c9e43",
+      "configuration_override_valid": true
+    },
+    {
+      "name": "pool-headroom-baseline-2",
+      "passed": true,
+      "completed_queries": 12,
+      "attempted_queries": 12,
+      "shutdown_exit_codes": [
+        0
+      ],
+      "oom_group_kill": 0,
+      "sqlstate_errors": [],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": true
+    },
+    {
+      "name": "pool-headroom-baseline-3",
+      "passed": true,
+      "completed_queries": 12,
+      "attempted_queries": 12,
+      "shutdown_exit_codes": [
+        0
+      ],
+      "oom_group_kill": 0,
+      "sqlstate_errors": [],
+      "observed_max_warm_target": 134217728,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": true
+    },
+    {
+      "name": "pool-headroom-candidate-3",
+      "passed": false,
+      "completed_queries": 4,
+      "attempted_queries": 5,
+      "shutdown_exit_codes": [
+        -9
+      ],
+      "oom_group_kill": 1,
+      "sqlstate_errors": [
+        null
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "3ea8082d1a7baed27b4c7bdc4c0ce1dec1eddc764765cf63ded43d7a8f8c9e43",
+      "configuration_override_valid": true
+    },
+    {
+      "name": "pool-warm-cap-warm64-1",
+      "passed": false,
+      "completed_queries": 6,
+      "attempted_queries": 8,
+      "shutdown_exit_codes": [
+        -9
+      ],
+      "oom_group_kill": 1,
+      "sqlstate_errors": [
+        "53200",
+        null
+      ],
+      "observed_max_warm_target": 134217728,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": false
+    },
+    {
+      "name": "pool-warm-cap-no-prefault-1",
+      "passed": false,
+      "completed_queries": 6,
+      "attempted_queries": 8,
+      "shutdown_exit_codes": [
+        -9
+      ],
+      "oom_group_kill": 1,
+      "sqlstate_errors": [
+        "53200",
+        null
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": false
+    },
+    {
+      "name": "pool-warm-cap-no-prefault-2",
+      "passed": false,
+      "completed_queries": 9,
+      "attempted_queries": 11,
+      "shutdown_exit_codes": [
+        -9
+      ],
+      "oom_group_kill": 1,
+      "sqlstate_errors": [
+        "53200",
+        null
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": false
+    },
+    {
+      "name": "pool-warm-cap-warm64-2",
+      "passed": false,
+      "completed_queries": 10,
+      "attempted_queries": 12,
+      "shutdown_exit_codes": [
+        -9
+      ],
+      "oom_group_kill": 1,
+      "sqlstate_errors": [
+        "53200",
+        null
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": false
+    },
+    {
+      "name": "pool-warm-cap-warm64-3",
+      "passed": false,
+      "completed_queries": 9,
+      "attempted_queries": 12,
+      "shutdown_exit_codes": [
+        0
+      ],
+      "oom_group_kill": 0,
+      "sqlstate_errors": [
+        "53200",
+        "53200",
+        "53200"
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": false
+    },
+    {
+      "name": "pool-warm-cap-no-prefault-3",
+      "passed": false,
+      "completed_queries": 8,
+      "attempted_queries": 12,
+      "shutdown_exit_codes": [
+        0
+      ],
+      "oom_group_kill": 0,
+      "sqlstate_errors": [
+        "53200",
+        "53200",
+        "53200",
+        "53200"
+      ],
+      "observed_max_warm_target": 268435456,
+      "binary_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+      "configuration_override_valid": false
+    }
+  ]
+}

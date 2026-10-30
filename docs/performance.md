@@ -274,3 +274,23 @@ The final binary passes 117 allocator tests (one helper intentionally ignored), 
 Immediate empty-run return rebuilt 600 runs in 200 idle cycles and failed a latency guardrail. Keeping empty runs exposed an inline reclamation gap, although the existing background sweep still reclaimed them. Handoff after every ReadyForQuery later failed the 4 GiB range p99 guardrail (+5.29%). Moving handoff to actual idle periods passed those guardrails; its remaining allocation bookkeeping was then removed. That candidate failed the 2 GiB range p99 guardrail (+13.04%) and new fallback lifecycle controls. The final candidate keeps system-backed runs local, returns empty system cache runs at thread exit, and preserves remote-free reclamation with the pool off. Separate diagnostics at 1 and 4 GiB recorded no pressure-release calls during the mixed workload.
 
 [Complete reports, controls, source hashes and portable replay](../artifacts/validation/allocator-idle-reuse-2026-10-30/README.md) retain all candidates. This remains WSL development evidence. Large spills, pressure recovery, prolonged churn and representative Linux-server qualification remain open.
+
+
+## Native PostgreSQL comparison (2026-10-30)
+
+The [native PostgreSQL comparison](../artifacts/validation/postgresql-comparison-2026-10-30/README.md) runs five alternating pairs at each of two phases, using the retained published Rust SQL binary and PostgreSQL 18.6. Both use four server cores, a 2 GiB cap, six ordinary clients, one million analytical rows, prepared statements and acknowledged durability. The moderate phase offers the same 178.6 statements/second to both; the unpaced phase measures throughput separately. Each 19-statement bundle contains twelve indexed reads, four updates and three analytics statements. Narrow ordered integer data favors columnar processing, and analytics dominate CPU cost despite representing a minority of statement calls.
+
+| Moderate-load metric (median of five trials) | PostgreSQL 18.6 | Rust SQL |
+| --- | ---: | ---: |
+| Server CPU per bundle | 196.89 ms | 17.93 ms |
+| Sampled peak server cgroup memory, including charged cache | 223.75 MiB | 479.77 MiB |
+| Sampled peak process PSS | 92.60 MiB | 507.13 MiB |
+| Point-read p99 | 0.405 ms | 0.527 ms |
+| Committed-update p99 | 1.225 ms | 1.294 ms |
+| Aggregate p99 | 31.710 ms | 4.171 ms |
+| Range p99 | 12.325 ms | 1.143 ms |
+| Join p99 | 44.932 ms | 5.494 ms |
+
+Unpaced throughput is 356.28 versus 4047.88 statements/second (11.36x). Moderate-load CPU per bundle is 90.89% lower, while cgroup memory is 2.14x and PSS 5.48x higher. All 91,200 timed statements and twenty committed-state/restart checks pass, with no OOM, swap, memory-limit or CPU-throttling event. The archive retains per-trial ranges, both memory accounting definitions, effective plans/settings, binary hashes and source. The portable replay passed on Linux 3.12 and Windows 3.14; the published runtime's three CI jobs also passed at commit 249541b.
+
+The owner's updated priorities are the two memory metrics plus point-read and update p99, while preserving the other measured gains. Native PostgreSQL is the baseline. These short WSL runs are not representative-server, maintenance, crash-recovery or production qualification. Sustained 1 GiB wide-spill diagnostics subsequently reproduced cancellations and OOM kills on the same Rust SQL runtime; the smaller analytical table here does not establish that operating boundary.
