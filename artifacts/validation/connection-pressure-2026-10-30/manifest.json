@@ -1,0 +1,25 @@
+{
+  "binary_sha256": "2f35e3a361d2b660a73c5aefb739af6178ee3f4dfbd5b9b63f48b165e5d5ec3c",
+  "source_base_commit": "4ec5ed699089d12fd507b37db5b54ec6031da0cb",
+  "harness_lf_sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294",
+  "archive_bytes": 45919,
+  "archive_sha256": "7d74e1dbe1cecd974dfb282797b71ff4c23ff0b000de686d00489268e1d577d6",
+  "files_sha256": {
+    "control-4g/initdb.log": "37fe05e166111840ec1384d31c7594e4abbf8ba3f3a7f5c99309e6848115c118",
+    "control-4g/report.json": "8fc20e0ec7e8406ce4a6ec4e440ec0c427a9c14d676fb4b9908d25c330ea3791",
+    "control-4g/report.log": "56da3e1241ffa5327ce770d2baacddf5e2ca5a21d2157675acab67e5bdd7070f",
+    "control-4g/server.log": "f4765ac7578ee9e045dcbe40472a40e15b166feb70e63e454b07afddc7dd7cf5",
+    "default-2g-v2/initdb.log": "114f430caca9ccf1e24cf178ee35342a0d66489abaf520009333d870ab9ca9b6",
+    "default-2g-v2/report.json": "1b77bc230aef586d5e0024bbb1e2cc03f0542823fb2a511646b474eab080cb60",
+    "default-2g-v2/report.log": "7aef8e491ba4bc787f4a01d95c6210f0c1c6541a39a2558de3bfd170cac51f46",
+    "default-2g-v2/server.log": "5ae022469b6c1b28020dfcdaa6c5401847721fe52921135f7f046518e1fb0854",
+    "source/cluster.py": "76fe01df995716e75f1ace56e50edc5e6a22d631313f43f1d9458aa57687acb7",
+    "source/connection_queue_probe.py": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294",
+    "source/resource_scope.py": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e",
+    "source/runtime-build.json": "40d94b55af0b5515eab53a0ad760ead6fcba1144a66f25cb0bf91313dbf35ccd",
+    "stackpages-2g/initdb.log": "bacf03f9068b6791c752ecd5374fa379e93db04191399bbabde609c7eccb1193",
+    "stackpages-2g/report.json": "e3ec23a410cd73cd6b760079a58c97ec7fc371770772e4fbabc2e70f8780acbc",
+    "stackpages-2g/report.log": "7aef8e491ba4bc787f4a01d95c6210f0c1c6541a39a2558de3bfd170cac51f46",
+    "stackpages-2g/server.log": "445f04d04786be99c2206c2b7a83373aa3e2fa859b12ead445b857d383f15f6e"
+  }
+}

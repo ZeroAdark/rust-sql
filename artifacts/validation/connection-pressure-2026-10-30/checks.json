@@ -1,0 +1,79 @@
+{
+  "production_qualified": false,
+  "two_gib_workload_passed": false,
+  "connection_configuration": {
+    "max_connections": 500,
+    "connection_queue_size": 300,
+    "intended_startups_per_wave": 800
+  },
+  "libc": [
+    "glibc",
+    "2.39"
+  ],
+  "transparent_hugepage": "always [madvise] never",
+  "host_settings_changed": false,
+  "runtime_binary_changed": false,
+  "performance_comparison": false,
+  "cases": {
+    "default-2g-v2": {
+      "passed": false,
+      "server_memory_limit_bytes": 2147483648,
+      "server_memory_peak_bytes": 2147483648,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 299,
+        "oom": 4,
+        "oom_kill": 3,
+        "oom_group_kill": 1
+      },
+      "completed_waves": 0,
+      "glibc_tunables": "",
+      "exception": "ConnectionResetError(104, 'Connection reset by peer')",
+      "remaining_server_pids": [],
+      "systemd_invocation_id": "aaf52d9b73ca45118ce56157a73e223e",
+      "systemd_unit": "rustsql-qualification-queue-pressure-default-2g-v2-20261030.service",
+      "exit_code": 1
+    },
+    "stackpages-2g": {
+      "passed": false,
+      "server_memory_limit_bytes": 2147483648,
+      "server_memory_peak_bytes": 2147483648,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 121,
+        "oom": 1,
+        "oom_kill": 3,
+        "oom_group_kill": 1
+      },
+      "completed_waves": 0,
+      "glibc_tunables": "glibc.pthread.stack_hugetlb=0",
+      "exception": "ConnectionResetError(104, 'Connection reset by peer')",
+      "remaining_server_pids": [],
+      "systemd_invocation_id": "d797f9f5ef6040a380641ff3420d5fa6",
+      "systemd_unit": "rustsql-qualification-queue-pressure-stackpages-2g-20261030.service",
+      "exit_code": 1
+    },
+    "control-4g": {
+      "passed": true,
+      "server_memory_limit_bytes": 4294967296,
+      "server_memory_peak_bytes": 2674262016,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "completed_waves": 2,
+      "glibc_tunables": "",
+      "exception": null,
+      "remaining_server_pids": [],
+      "systemd_invocation_id": "52d02790f5704bc886a2419caa21cd54",
+      "systemd_unit": "rustsql-qualification-queue-pressure-control-4g-20261030.service",
+      "exit_code": 0
+    }
+  }
+}

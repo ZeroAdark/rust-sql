@@ -7,6 +7,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import resource
@@ -198,10 +199,13 @@ def run_burst(args, report):
     group, launcher = scope.server(args.memory_mib)
     report.update(mode="burst", binary_sha256=hashlib.sha256((args.candidate / "postgres").read_bytes()).hexdigest(),
                   assertions_enabled=__debug__, server_cpus=sorted(scope.server_cpus), client_cpus=sorted(scope.client_cpus),
+                  libc=platform.libc_ver(), glibc_tunables=os.environ.get("GLIBC_TUNABLES", ""),
+                  transparent_hugepage=(Path("/sys/kernel/mm/transparent_hugepage/enabled").read_text().strip()),
                   source_lf_sha256={name: hashlib.sha256(Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
                                    for name in ("connection_queue_probe.py", "cluster.py", "resource_scope.py")},
                   cgroup=str(group), limits={n: (group / n).read_text().strip()
                   for n in ("memory.max", "memory.swap.max", "cpu.max", "pids.max")})
+    before = None
     try:
         with Cluster(args.candidate, args.work_dir, launcher=launcher,
                      settings=["max_connections=500", "reserved_connections=0", "superuser_reserved_connections=0",
@@ -212,6 +216,7 @@ def run_burst(args, report):
             with psycopg.connect(cluster.dsn, autocommit=True) as admin:
                 admin.execute("CREATE ROLE queue_user LOGIN")
             before = snapshot(group)
+            report["resources_before"] = before
             sampler = Sampler(group)
             sampler.start()
             report["waves"] = []
@@ -222,9 +227,9 @@ def run_burst(args, report):
                     print(json.dumps({k: v for k, v in result.items() if k != "startup_seconds"}), flush=True)
             finally:
                 report["sampled_resources"] = sampler.stop()
-            after = snapshot(group)
-            report.update(resources_before=before, resources_after=after,
-                          cpu_delta=delta(before["cpu"], after["cpu"]), memory_events=delta(before["events"], after["events"]))
+                after = snapshot(group)
+                report.update(resources_after=after, cpu_delta=delta(before["cpu"], after["cpu"]),
+                              memory_events=delta(before["events"], after["events"]))
         report["resources_after_shutdown"] = snapshot(group)
         report["cpu_delta_including_shutdown"] = delta(before["cpu"], report["resources_after_shutdown"]["cpu"])
         assert not any(report["resources_after_shutdown"]["events"].get(k, 0) for k in ("oom", "oom_kill", "oom_group_kill"))
@@ -233,6 +238,10 @@ def run_burst(args, report):
         assert len(report["waves"]) == 2 and all(w["passed"] for w in report["waves"])
         report["passed"] = True
     finally:
+        # Preserve the kernel counters even when an OOM/reset aborts a wave.
+        report["resources_after_shutdown"] = snapshot(group)
+        if before is not None:
+            report["cpu_delta_including_shutdown"] = delta(before["cpu"], report["resources_after_shutdown"]["cpu"])
         report["remaining_server_pids"] = (group / "cgroup.procs").read_text().split()
         if report["remaining_server_pids"]:
             report["passed"] = False
