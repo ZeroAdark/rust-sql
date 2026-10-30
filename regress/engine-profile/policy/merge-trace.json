@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "case": "merge",
+  "source_sha256": "3e17d4d53b10d967eeb6698dcf2d83e8f6d1551fc1b00782b8056313bc59a0d2",
+  "expected_sha256": "98f96314fcdd5ffbda52a8d5254b120a06e47281aa5cac3d7531b542bc5a98f5",
+  "sql_line": 667,
+  "sql": "MERGE INTO target t\nUSING source AS s\nON t.tid = s.sid\nWHEN MATCHED AND t.balance > s.delta THEN\n    UPDATE SET balance = t.balance - s.delta\nWHEN MATCHED THEN\n\tUPDATE SET balance = 0\nWHEN NOT MATCHED THEN\n    INSERT VALUES (s.sid, s.delta)\nWHEN NOT MATCHED BY SOURCE AND tid = 1 THEN\n\tUPDATE SET balance = 0\nWHEN NOT MATCHED BY SOURCE THEN\n\tDELETE\nRETURNING merge_action(), old, new, t.*;",
+  "target_rows": [
+    [
+      1,
+      10
+    ],
+    [
+      2,
+      20
+    ],
+    [
+      3,
+      30
+    ]
+  ],
+  "source_rows": [
+    [
+      3,
+      20
+    ],
+    [
+      4,
+      40
+    ]
+  ],
+  "reason": "Only the complete source-bound MERGE action trace may reorder rows. Actions, old/new values, returned rows, BEFORE/AFTER row order and statement phases must agree with one input oracle; all other output remains exact."
+}

@@ -63,7 +63,7 @@ def display_table(lines, start, rule):
         return table(lines, start)
     if lines[start].strip() != rule["header"] or "+" in lines[start + 1]:
         return None
-    if kind in {"text_plan", "masked_text_plan"}:
+    if kind in {"text_plan", "masked_text_plan", "merge_plan"}:
         parsed = table(lines, start)
         return parsed if parsed and parsed[1] and all(row.startswith(" ") for row in parsed[1]) else None
     if kind not in {"incremental_sort_json", "masked_explain_json"}:
@@ -142,9 +142,14 @@ def guard_change(before, after, rule):
         cells = after[0].split("|")
         if len(cells) != len(rule["columns"]) or any(cell.strip(" ") for cell in cells):
             raise ValueError("unavailable hash metrics must be SQL NULL")
-    elif kind == "text_plan":
+    elif kind in {"text_plan", "merge_plan"}:
         if root_count(before) != root_count(after):
             raise ValueError("measured root rows/loops changed")
+        if kind == "merge_plan":
+            before_counts = [row for row in before if row.lstrip().startswith("Tuples:")]
+            after_counts = [row for row in after if row.lstrip().startswith("Tuples:")]
+            if len(before_counts) > 1 or before_counts != after_counts:
+                raise ValueError("measured MERGE action counts changed")
     elif kind == "masked_text_plan":
         signature = MASKED_ROOTS.get(rule.get("root_format"))
         if signature is None or any(not rows or not rows[0].endswith(signature) or

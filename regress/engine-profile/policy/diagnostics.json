@@ -345,6 +345,62 @@
           "sql": "select parallel_workers_to_launch > :'parallel_workers_to_launch_before'  AS wrk_to_launch,\n       parallel_workers_launched > :'parallel_workers_launched_before' AS wrk_launched\n  from pg_stat_database\n  where datname = current_database();"
         }
       }
+    },
+    "3e17d4d53b10d967eeb6698dcf2d83e8f6d1551fc1b00782b8056313bc59a0d2": {
+      "case": "merge",
+      "definitions": {
+        "explain_merge": "7cd519c188c7dbcb91f1aaf90c6fc7b2588b4c0ad329a42399ecc388ffb73004"
+      },
+      "statements": {
+        "04476dcb7d6bb193f19b7b732c4406bd662f99c2425629b99991ed05dd1398f0": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1087,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED THEN\n\tUPDATE SET b = t.b + 1');"
+        },
+        "56112593603798e1752a32a263eb80da09ee1a9769eb210f9875a55d52417a51": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1093,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED AND t.a < 10 THEN\n\tUPDATE SET b = t.b + 1');"
+        },
+        "81b1e64f1d19fa2ed56cfde967d8b0390c9dcf820e6de68b1df8b3cddb21911f": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1099,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED AND t.a < 10 THEN\n\tUPDATE SET b = t.b + 1\nWHEN MATCHED AND t.a >= 10 AND t.a <= 20 THEN\n\tDELETE');"
+        },
+        "9ac216b6a575187424a557325dbd9d7578f1c222ae20c754043dbd4d78808659": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1107,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN NOT MATCHED AND s.a < 10 THEN\n\tINSERT VALUES (a, b)');"
+        },
+        "abe9097d9e90e03ecff5454c7b9cf7e447693f53996164a51fbd582b932ff823": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1113,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED AND t.a < 10 THEN\n\tUPDATE SET b = t.b + 1\nWHEN MATCHED AND t.a >= 30 AND t.a <= 40 THEN\n\tDELETE\nWHEN NOT MATCHED AND s.a < 20 THEN\n\tINSERT VALUES (a, b)');"
+        },
+        "925a1589cdacc2fd747d6dabc620e82bd8500513dabcaf4a27a0eb351f404abd": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1123,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN NOT MATCHED BY SOURCE and t.a < 10 THEN\n\tDELETE');"
+        },
+        "847861e053e13dd14a6640624b16b7e998b27e3ad229a1c790e3a678b86db554": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1129,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN NOT MATCHED BY SOURCE AND t.a < 10 THEN\n\tDELETE\nWHEN NOT MATCHED BY TARGET AND s.a < 20 THEN\n\tINSERT VALUES (a, b)');"
+        },
+        "5173854976b8a6e3d0a79f016e2f0f37ecdf1aaf4912df776ea95d81ae4ee2e0": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1137,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a AND t.a < -1000\nWHEN MATCHED AND t.a < 10 THEN\n\tDO NOTHING');"
+        }
+      }
     }
   }
 }

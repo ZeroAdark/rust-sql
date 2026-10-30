@@ -7,6 +7,8 @@ The separate aggregate-strategy witness handles one deliberately inconsistent
 regression helper; it never grants an exception to ordinary aggregate results.
 The worker-context witness permits only two pinned execution-site omissions,
 preserving the complete primary message and SQL-function context.
+The MERGE witness proves one complete row-action/trigger/RETURNING trace against
+pinned input data; it never sorts arbitrary notices independently.
 """
 from collections import Counter
 from functools import lru_cache
@@ -17,6 +19,7 @@ from pathlib import Path
 from compare_regression import columns, find_anchor, physical_lines, statements, table
 from aggregate_strategy import compare_aggregate_strategy
 from worker_context import compare_worker_context
+from merge_trace import compare_merge_trace
 
 
 POLICY = Path(__file__).resolve().parents[2] / "regress/engine-profile/policy/choices.json"
@@ -136,6 +139,8 @@ def compare_choices(source, expected, actual):
     actual, strategy_proofs = compare_aggregate_strategy(source, expected, actual)
     actual, worker_proofs = compare_worker_context(source, expected, actual)
     strategy_proofs.extend(worker_proofs)
+    actual, merge_proofs = compare_merge_trace(source, expected, actual)
+    strategy_proofs.extend(merge_proofs)
     entry = policy().get(digest(source))
     if entry is None or entry["expected_sha256"] != digest(expected):
         return actual, strategy_proofs

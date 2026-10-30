@@ -1,7 +1,7 @@
 # Reviewed diagnostic expectations and SQL choice proofs
 
-These nineteen profiles change 178 complete diagnostic tables under the owner's
-SQL/protocol compatibility contract: 128 direct EXPLAIN tables, 30 plan-wrapper
+These twenty profiles change 186 complete diagnostic tables under the owner's
+SQL/protocol compatibility contract: 128 direct EXPLAIN tables, 38 plan-wrapper
 results, 18 projections of unavailable hash metrics, one worker-counter observation
 and one allocator inventory.
 They do not replace vendor SQL or expected files. Measured root rows/loops cannot
@@ -29,13 +29,14 @@ numeric placeholders are checked as formatting, never used as measurement eviden
 | join_hash | 33 | Fifteen direct plans and eighteen NULL projections of unavailable batch measurements |
 | aggregates | 6 | Serial aggregation and decorrelated plans; the inconsistent combiner fixture has a separate result witness |
 | select_parallel | 49 | Forty-seven direct plans, one sort-statistics helper and one truthful worker-counter observation |
+| merge | 8 | EXPLAIN helpers preserve root and action counts; one trigger/RETURNING trace has a separate input-based witness |
 
 Each profile binds the whole SQL source, original expectation, statement occurrence
 and original plan table by SHA-256. Replacements are exact aligned plan tables;
 there are no regular-expression masks. The verifier rejects changed inputs,
 non-EXPLAIN replacements, missing echoes, duplicate replacements and appended
 statements. The separate [diagnostic policy](policy/diagnostics.json) binds the
-complete source, twelve helper definitions and 38 unique diagnostic statements. A
+complete source, thirteen helper definitions and 46 unique diagnostic statements. A
 profile cannot grant permission to arbitrary helpers or scalar queries. The only
 allocator observation accepts an empty result; the companion live probe checks
 cursor values, byte accounting and view permissions. Errors, notices and other
@@ -94,6 +95,14 @@ message over simple and extended protocols, role restoration, savepoint recovery
 Only the pinned `pg_stat_database` boolean observation may change to false/false,
 reflecting zero PostgreSQL backend-worker launches; ordinary scalar data stays strict.
 
+The [MERGE trace policy](policy/merge-trace.json) admits one complete trace only
+after an input-based oracle proves all actions, old/new values, consistent row
+trigger/RETURNING order and exact statement phases. It never sorts notices
+independently. The paired live probe replays the real fixture prefix, checks
+typed values, final contents and rollback, and verifies duplicate-source error
+atomicity. Eight EXPLAIN helpers preserve root and action counters while both
+text-helper and JSON executions match independently calculated table states.
+
 `scripts/validation/engine_regression_profile.py --record` is an explicit authoring
 operation requiring a reason and a new file. It refuses to record a case if any
 other difference remains after permitted row permutations. Review the complete
@@ -103,7 +112,7 @@ x86-64 as well as the two earlier runs. The full
 auditor first requires every native result to match a pinned PostgreSQL fixture;
 whole-file upstream alternatives cover optional feature/platform branches.
 
-The raw suite remains separate. The reviewed profile accepts 229/231 cases, with
-two unresolved cases. This is not a complete compatibility or production claim.
+The raw suite remains separate. The reviewed profile accepts 230/231 cases, with
+one unresolved case. This is not a complete compatibility or production claim.
 See [the investigation](../../docs/compatibility-investigation.md) and
-[retained evidence](../../artifacts/validation/parallel-contract-2026-10-30/README.md).
+[retained evidence](../../artifacts/validation/merge-contract-2026-10-30/README.md).
