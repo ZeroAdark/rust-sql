@@ -29,6 +29,7 @@ jobs:
       - run: python3 artifacts/validation/postgresql-warm-reserve-2026-10-30/replay.py
       - run: python3 artifacts/validation/allocator-retention-screening-2026-10-30/replay.py
       - run: python3 artifacts/validation/bounded-small-refill-2026-10-30/replay.py
+      - run: python3 artifacts/validation/portal-memory-screening-2026-10-30/replay.py
       - run: python3 -m unittest discover -s scripts/validation -p 'test_*.py'
       - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -62,6 +63,7 @@ jobs:
       - run: cargo test --locked --release -j 2 -p main_main --bin postgres allocator_constructor_honors_warm_limit_and_host_age
       - run: cargo test --locked --release -j 2 -p gravity_lowerv4 --lib
       - run: cargo test --locked --release -j 2 -p inval --lib
+      - run: cargo test --locked --release -j 2 -p portalmem -p types_portal --lib
       - run: 'cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::'
       - run: cargo test --locked --release -j 2 -p compression -p basebackup_compress -p pgrc_codec -p xlogreader -p xloginsert -p parquet_read --lib
       - run: cargo test --locked --release -j 2 -p gravity_wasm --test gravity_wasm_suite
@@ -80,6 +82,9 @@ jobs:
           python3 scripts/validation/compatibility_probe.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" --output artifacts/compatibility.json
+          python3 scripts/validation/bind_lifecycle_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/bind-lifecycle.json
           python3 scripts/validation/explain_contract.py --candidate target/release \
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/explain-contract.json
           python3 scripts/validation/admission_probe.py --candidate target/release \
