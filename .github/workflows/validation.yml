@@ -54,7 +54,7 @@ jobs:
       - run: cargo build --locked --release -j 2 -p main_main -p initdb
       - run: cargo test --locked --release -j 2 -p gravity_lowerv4 --lib
       - run: cargo test --locked --release -j 2 -p inval --lib
-      - run: cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::
+      - run: 'cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::'
       - run: cargo test --locked --release -j 2 -p compression -p basebackup_compress -p pgrc_codec -p xlogreader -p xloginsert -p parquet_read --lib
       - run: cargo test --locked --release -j 2 -p gravity_wasm --test gravity_wasm_suite
       - name: Build the pinned PostgreSQL reference separately
