@@ -98,6 +98,9 @@ jobs:
           python3 scripts/validation/merge_contract_probe.py --candidate-bin target/release \
             --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/merge-contract.json
+          python3 scripts/validation/window_trace_probe.py --candidate-bin target/release \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/window-trace.json
           python3 scripts/validation/catalog_churn_probe.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/catalog-churn.json
@@ -115,17 +118,19 @@ jobs:
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/server-smoke.json \
             --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" \
             --reference-bin "$RUNNER_TEMP/postgres18/bin" --isolation-overlay regress/isolation-overlay
-      # Deliberately remains red while raw PostgreSQL output differs; never silently normalize it.
+      # Retain the raw verdict. Only a completed capture may reach the required
+      # source-bound engine audit; smoke/runner errors still fail this step.
       - name: Native PostgreSQL regression control
         run: |
           python3 scripts/validation/reference_regression.py --reference "$RUNNER_TEMP/postgres18/bin" \
             --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/native-regression.json
-      - name: Strict PostgreSQL regression expectations
+      - name: Capture strict PostgreSQL regression expectations
         run: |
           ulimit -s 65520
           python3 scripts/validation/server_smoke.py --bin-dir target/release \
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/postgres-raw.json \
+            --capture-regression \
             --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
             --reference-bin "$RUNNER_TEMP/postgres18/bin"
       - name: Reviewed engine regression contract

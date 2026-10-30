@@ -2,13 +2,16 @@
 
 This is not a general geometric/JSON normalizer. Unknown source or SQL hashes,
 finite-distance reordering, changed ordinary values, duplicate loss and primary errors remain
-strict. Each proof uses expected O(rows) work and at most O(rows) storage.
+strict. The geometric/JSON proofs use expected O(rows) work and O(rows) storage.
 The separate aggregate-strategy witness handles one deliberately inconsistent
 regression helper; it never grants an exception to ordinary aggregate results.
 The worker-context witness permits only two pinned execution-site omissions,
 preserving the complete primary message and SQL-function context.
 The MERGE witness proves one complete row-action/trigger/RETURNING trace against
 pinned input data; it never sorts arbitrary notices independently.
+Window witnesses prove complete frame results and rank/filter membership using
+consistent orders derived from pinned fixture inputs, in O(rows log rows) worst
+case time and O(rows) storage.
 """
 from collections import Counter
 from functools import lru_cache
@@ -20,6 +23,7 @@ from compare_regression import columns, find_anchor, physical_lines, statements,
 from aggregate_strategy import compare_aggregate_strategy
 from worker_context import compare_worker_context
 from merge_trace import compare_merge_trace
+from window_trace import compare_window_trace
 
 
 POLICY = Path(__file__).resolve().parents[2] / "regress/engine-profile/policy/choices.json"
@@ -141,6 +145,8 @@ def compare_choices(source, expected, actual):
     strategy_proofs.extend(worker_proofs)
     actual, merge_proofs = compare_merge_trace(source, expected, actual)
     strategy_proofs.extend(merge_proofs)
+    actual, window_proofs = compare_window_trace(source, expected, actual)
+    strategy_proofs.extend(window_proofs)
     entry = policy().get(digest(source))
     if entry is None or entry["expected_sha256"] != digest(expected):
         return actual, strategy_proofs

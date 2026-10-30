@@ -15,6 +15,8 @@ import subprocess
 import tempfile
 import time
 
+from regression_capture import validate_run
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -24,10 +26,14 @@ def main():
     ap.add_argument("--work-dir", type=Path, help="parent for retained disposable clusters (default: system temp)")
     ap.add_argument("--mixed-seconds", type=int, default=0, help="optional mixed probe; requires psycopg 3")
     ap.add_argument("--regression-dir", type=Path, help="built PostgreSQL 18.6 src/test/regress directory")
+    ap.add_argument("--capture-regression", action="store_true",
+                    help="allow comparison exit 1 only after complete smoke/suite capture; require a separate reviewed audit")
     ap.add_argument("--isolation-dir", type=Path, help="built PostgreSQL 18.6 src/test/isolation directory")
     ap.add_argument("--isolation-overlay", type=Path, help="copy documented engine isolation fixtures into an owned input tree")
     ap.add_argument("--reference-bin", type=Path, help="PostgreSQL 18.6 client directory for pg_regress")
     args = ap.parse_args()
+    if args.capture_regression and args.regression_dir is None:
+        ap.error("--capture-regression requires --regression-dir and a separate reviewed audit")
     if os.geteuid() == 0:
         ap.error("run as a non-root user")
     bins = args.bin_dir.resolve()
@@ -170,13 +176,23 @@ def main():
     except Exception as exc:
         report["error"] = str(exc)
     finally:
+        shutdown_complete = False
         try:
             stop(signal.SIGINT)
+            shutdown_complete = True
         finally:
+            if args.capture_regression:
+                try:
+                    validate_run(report)
+                    report["capture_complete"] = shutdown_complete
+                except ValueError as error:
+                    report["capture_complete"] = False
+                    report["capture_error"] = str(error)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
-    return 0 if report["passed"] else 1
+    accepted = report.get("capture_complete") is True if args.capture_regression else report["passed"]
+    return 0 if accepted else 1
 
 
 if __name__ == "__main__":

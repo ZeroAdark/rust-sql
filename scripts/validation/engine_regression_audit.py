@@ -17,6 +17,8 @@ from diagnostic_policy import STATISTIC_KINDS
 from aggregate_strategy import POLICY as AGGREGATE_POLICY
 from worker_context import POLICY as WORKER_POLICY
 from merge_trace import POLICY as MERGE_POLICY
+from window_trace import POLICY as WINDOW_POLICY
+from regression_capture import validate_run
 
 
 def audit(fixtures, reference, candidate, profiles, output):
@@ -90,8 +92,7 @@ def main():
     native, candidate = json.loads(read(args.reference_report)), json.loads(read(args.candidate_report))
     if not native["passed"]:
         raise ValueError("native control failed")
-    if candidate["regression"]["returncode"] not in (0, 1):
-        raise ValueError("candidate regression runner failed")
+    validate_run(candidate)
     report = audit(args.fixtures, Path(native["results"]) / "results",
                    Path(candidate["regression"]["directory"]) / "results", args.profiles, args.output)
     report.update(reference_report_sha256=digest(read(args.reference_report)),
@@ -101,6 +102,7 @@ def main():
                   aggregate_strategy_policy_sha256=digest(read(AGGREGATE_POLICY)),
                   worker_context_policy_sha256=digest(read(WORKER_POLICY)),
                   merge_trace_policy_sha256=digest(read(MERGE_POLICY)),
+                  window_trace_policy_sha256=digest(read(WINDOW_POLICY)),
                   raw_candidate_verdict=candidate["passed"])
     (args.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({k: v for k, v in report.items() if k != "cases"}, indent=2))

@@ -103,6 +103,13 @@ typed values, final contents and rollback, and verifies duplicate-source error
 atomicity. Eight EXPLAIN helpers preserve root and action counters while both
 text-helper and JSON executions match independently calculated table states.
 
+The [window trace policy](policy/window-trace.json) binds 24 original queries.
+It proves complete input multisets, frame values and consistent peer ordering.
+Filtered rank queries construct full orders for omitted rows and reapply the
+predicate. Bounds are O(1) for ROWS/GROUPS and O(log n) for RANGE; total work is
+O(n log n) worst case with O(n) storage. There is no per-cell choice or permutation
+search. The paired probe passes 142 typed/evaluation-order checks per engine.
+
 `scripts/validation/engine_regression_profile.py --record` is an explicit authoring
 operation requiring a reason and a new file. It refuses to record a case if any
 other difference remains after permitted row permutations. Review the complete
@@ -112,7 +119,8 @@ x86-64 as well as the two earlier runs. The full
 auditor first requires every native result to match a pinned PostgreSQL fixture;
 whole-file upstream alternatives cover optional feature/platform branches.
 
-The raw suite remains separate. The reviewed profile accepts 230/231 cases, with
-one unresolved case. This is not a complete compatibility or production claim.
+The raw suite remains separate at 203/231. The reviewed contract accepts 231/231
+cases across four full runs. This is not a complete compatibility or production
+claim.
 See [the investigation](../../docs/compatibility-investigation.md) and
-[retained evidence](../../artifacts/validation/merge-contract-2026-10-30/README.md).
+[retained evidence](../../artifacts/validation/window-contract-2026-10-30/README.md).

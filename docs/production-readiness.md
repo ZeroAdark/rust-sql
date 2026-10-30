@@ -7,7 +7,7 @@ Priority: reduce CPU cost first, while preserving correctness and latency. Memor
 | Gate | Required evidence | Current scope |
 | --- | --- | --- |
 | Build and dependencies | Reproducible locked Linux release build, vulnerability/license review, SBOM | Locked release build and clean RustSec audit; license review/SBOM and independent reproducibility pending |
-| SQL compatibility | PostgreSQL 18.6 regression and isolation suites, differential driver/application corpus | 88 differential checks and 510 engine-profile isolation cases pass; reviewed regression accepts 230/231, raw remains 203/231. Paired data/diagnostic, grouping, aggregate, protocol and MERGE probes pass; `window` and broader application/driver coverage remain open |
+| SQL compatibility | PostgreSQL 18.6 regression and isolation suites, differential driver/application corpus | 88 differential checks and 510 engine-profile isolation cases pass; reviewed regression accepts 231/231 across four full runs, raw remains 203/231. Paired data/diagnostic, grouping, aggregate, protocol, MERGE and window probes pass; broader application/driver coverage remains open |
 | Durability | Repeated crashes during WAL, checkpoints, columnar compaction and DDL; committed-write verification | Ten whole-process kills preserve committed heap/columnar rows and reject uncommitted writes/DDL; excluded-partition corruption and exact restoration pass; compaction and broader I/O-fault campaigns pending |
 | Recovery operations | Restore verified backups; PITR; replica catch-up, failover and upgrade rehearsals | Native PG 18.6 logical dump/restore preserves data, access methods and grants; remaining operations pending |
 | Memory safety | Sanitizers, Miri where supported, concurrency models, allocator/JIT review and fuzzing | Upstream facilities exist; full fork campaigns pending |
@@ -60,7 +60,7 @@ cargo install cargo-audit --version 0.22.2 --locked
 cargo audit --deny warnings
 ```
 
-The manual full-server CI job includes these probes and the strict raw suite; it intentionally fails while raw expectations differ. The automatic dependency job rejects vulnerabilities and warnings. No advisories are suppressed.
+The manual full-server CI job includes these probes, preserves the strict raw verdict, and requires the separate reviewed engine audit. Its explicit capture mode permits comparison exit 1 only after complete smoke checks and a normal suite run; runner failures and unrelated errors still fail. The new full capture and reviewed audit pass locally. The automatic dependency job rejects vulnerabilities and warnings. No advisories are suppressed.
 
 ## Deployment work still needed
 

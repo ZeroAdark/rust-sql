@@ -6,8 +6,9 @@ an explicit authoring operation; verification only reads committed profiles.
 Only the separately reviewed diagnostic policy can admit specific helper results
 or allocator observations. Independent witnesses prove pinned SQL choices, one
 deliberately non-equivalent aggregate fixture's serial result, two worker-stack
-omissions and one consistent MERGE row-action trace. Ordinary SQL values, primary
-errors, SQL-function context and unrelated notices stay untouched.
+omissions, one MERGE row-action trace and consistent window-frame/rank traces.
+Ordinary SQL values, primary errors, SQL-function context and unrelated notices
+stay untouched.
 """
 import argparse
 from collections import Counter

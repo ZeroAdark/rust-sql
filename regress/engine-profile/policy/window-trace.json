@@ -1,0 +1,985 @@
+{
+  "version": 1,
+  "case": "window",
+  "source_sha256": "eebc389dc528151d762ec7c0e75aa0bc58275b408f77c478ece9da2374ddc113",
+  "expected_sha256": "6cfe8b0ff6550e90c38c56834ce67f2c06cf055ecc8a998692cb9693f5856b9e",
+  "data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+  "setup_lf_sha256": "1c5e005b488f306c41a349a55c768fe22a2882f0955ae8ae46d26d5baadcf7c3",
+  "employee_insert_line": 12,
+  "datetime_insert_line": 701,
+  "statements": [
+    {
+      "sql_line": 78,
+      "kind": "frame",
+      "dataset": "tenk_unique2",
+      "input_columns": [
+        1,
+        2
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            null,
+            0,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "ten",
+      "type_oids": [
+        23,
+        23,
+        23
+      ],
+      "sql": "SELECT last_value(four) OVER (ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10;",
+      "columns": [
+        "last_value",
+        "ten",
+        "four"
+      ]
+    },
+    {
+      "sql_line": 214,
+      "kind": "frame",
+      "dataset": "tenk_unique1",
+      "input_columns": [
+        1,
+        2
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "ROWS",
+            0,
+            2,
+            "CURRENT ROW"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "four",
+      "type_oids": [
+        23,
+        23,
+        23
+      ],
+      "sql": "SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 following exclude current row),\n\tunique1, four\nFROM tenk1 WHERE unique1 < 10;",
+      "columns": [
+        "first_value",
+        "unique1",
+        "four"
+      ]
+    },
+    {
+      "sql_line": 218,
+      "kind": "frame",
+      "dataset": "tenk_unique1",
+      "input_columns": [
+        1,
+        2
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "ROWS",
+            0,
+            2,
+            "GROUP"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "four",
+      "type_oids": [
+        23,
+        23,
+        23
+      ],
+      "sql": "SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 following exclude group),\n\tunique1, four\nFROM tenk1 WHERE unique1 < 10;",
+      "columns": [
+        "first_value",
+        "unique1",
+        "four"
+      ]
+    },
+    {
+      "sql_line": 226,
+      "kind": "frame",
+      "dataset": "tenk_unique1",
+      "input_columns": [
+        1,
+        2
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "last",
+          "frame": [
+            "ROWS",
+            0,
+            2,
+            "CURRENT ROW"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "four",
+      "type_oids": [
+        23,
+        23,
+        23
+      ],
+      "sql": "SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 following exclude current row),\n\tunique1, four\nFROM tenk1 WHERE unique1 < 10;",
+      "columns": [
+        "last_value",
+        "unique1",
+        "four"
+      ]
+    },
+    {
+      "sql_line": 230,
+      "kind": "frame",
+      "dataset": "tenk_unique1",
+      "input_columns": [
+        1,
+        2
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "last",
+          "frame": [
+            "ROWS",
+            0,
+            2,
+            "GROUP"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "four",
+      "type_oids": [
+        23,
+        23,
+        23
+      ],
+      "sql": "SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 following exclude group),\n\tunique1, four\nFROM tenk1 WHERE unique1 < 10;",
+      "columns": [
+        "last_value",
+        "unique1",
+        "four"
+      ]
+    },
+    {
+      "sql_line": 234,
+      "kind": "frame",
+      "dataset": "tenk_unique1",
+      "input_columns": [
+        1,
+        2
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "last",
+          "frame": [
+            "ROWS",
+            0,
+            2,
+            "TIES"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "four",
+      "type_oids": [
+        23,
+        23,
+        23
+      ],
+      "sql": "SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 following exclude ties),\n\tunique1, four\nFROM tenk1 WHERE unique1 < 10;",
+      "columns": [
+        "last_value",
+        "unique1",
+        "four"
+      ]
+    },
+    {
+      "sql_line": 266,
+      "kind": "frame",
+      "dataset": "tenk_unique1",
+      "input_columns": [
+        3,
+        4
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            0,
+            null,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "nth2",
+          "frame": [
+            "RANGE",
+            0,
+            null,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 2,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            0,
+            null,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "four",
+      "type_oids": [
+        23,
+        23,
+        23,
+        23,
+        23
+      ],
+      "sql": "SELECT first_value(unique1) over w,\n\tnth_value(unique1, 2) over w AS nth_2,\n\tlast_value(unique1) over w, unique1, four\nFROM tenk1 WHERE unique1 < 10\nWINDOW w AS (order by four range between current row and unbounded following);",
+      "columns": [
+        "first_value",
+        "nth_2",
+        "last_value",
+        "unique1",
+        "four"
+      ]
+    },
+    {
+      "sql_line": 440,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        2,
+        3
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "TIES"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following\n\texclude ties),\n\tlast_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "first_value",
+        "last_value",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 445,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        2,
+        3
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "TIES"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "TIES"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following\n\texclude ties),\n\tlast_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following\n\texclude ties),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "first_value",
+        "last_value",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 451,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        2,
+        3
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "GROUP"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "GROUP"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following\n\texclude group),\n\tlast_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following\n\texclude group),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "first_value",
+        "last_value",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 457,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        2,
+        3
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "CURRENT ROW"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            null,
+            "one_year",
+            "CURRENT ROW"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following\n\texclude current row),\n\tlast_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following\n\texclude current row),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "first_value",
+        "last_value",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 484,
+      "kind": "frame",
+      "dataset": "nulls",
+      "input_columns": [
+        0,
+        1
+      ],
+      "functions": [
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            -2,
+            2,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 3,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            -2,
+            2,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": true,
+      "sort_sql": "x DESC NULLS FIRST",
+      "type_oids": [
+        23,
+        23,
+        23,
+        23
+      ],
+      "sql": "select x, y,\n       first_value(y) over w,\n       last_value(y) over w\nfrom\n  (select x, x as y from generate_series(1,5) as x\n   union all select null, 42\n   union all select null, 43) ss\nwindow w as\n  (order by x desc nulls first range between 2 preceding and 2 following);",
+      "columns": [
+        "x",
+        "y",
+        "first_value",
+        "last_value"
+      ]
+    },
+    {
+      "sql_line": 720,
+      "kind": "frame",
+      "dataset": "time",
+      "input_columns": [
+        0,
+        1
+      ],
+      "functions": [
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            -70,
+            120,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 3,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            -70,
+            120,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": true,
+      "sort_sql": "f_time DESC",
+      "type_oids": [
+        23,
+        1083,
+        23,
+        23
+      ],
+      "sql": "select id, f_time, first_value(id) over w, last_value(id) over w\nfrom datetimes\nwindow w as (order by f_time desc range between\n             '70 min' preceding and '2 hours' following);",
+      "columns": [
+        "id",
+        "f_time",
+        "first_value",
+        "last_value"
+      ]
+    },
+    {
+      "sql_line": 756,
+      "kind": "frame",
+      "dataset": "timetz",
+      "input_columns": [
+        0,
+        1
+      ],
+      "functions": [
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            -70,
+            120,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 3,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            -70,
+            120,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": true,
+      "sort_sql": "f_timetz DESC",
+      "type_oids": [
+        23,
+        1266,
+        23,
+        23
+      ],
+      "sql": "select id, f_timetz, first_value(id) over w, last_value(id) over w\nfrom datetimes\nwindow w as (order by f_timetz desc range between\n             '70 min' preceding and '2 hours' following);",
+      "columns": [
+        "id",
+        "f_timetz",
+        "first_value",
+        "last_value"
+      ]
+    },
+    {
+      "sql_line": 792,
+      "kind": "frame",
+      "dataset": "interval",
+      "input_columns": [
+        0,
+        1
+      ],
+      "functions": [
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 3,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": true,
+      "sort_sql": "f_interval DESC",
+      "type_oids": [
+        23,
+        1186,
+        23,
+        23
+      ],
+      "sql": "select id, f_interval, first_value(id) over w, last_value(id) over w\nfrom datetimes\nwindow w as (order by f_interval desc range between\n             '1 year' preceding and '1 year' following);",
+      "columns": [
+        "id",
+        "f_interval",
+        "first_value",
+        "last_value"
+      ]
+    },
+    {
+      "sql_line": 828,
+      "kind": "frame",
+      "dataset": "timestamptz",
+      "input_columns": [
+        0,
+        1
+      ],
+      "functions": [
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 3,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": true,
+      "sort_sql": "f_timestamptz DESC",
+      "type_oids": [
+        23,
+        1184,
+        23,
+        23
+      ],
+      "sql": "select id, f_timestamptz, first_value(id) over w, last_value(id) over w\nfrom datetimes\nwindow w as (order by f_timestamptz desc range between\n             '1 year' preceding and '1 year' following);",
+      "columns": [
+        "id",
+        "f_timestamptz",
+        "first_value",
+        "last_value"
+      ]
+    },
+    {
+      "sql_line": 864,
+      "kind": "frame",
+      "dataset": "timestamp",
+      "input_columns": [
+        0,
+        1
+      ],
+      "functions": [
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "RANGE",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 3,
+          "name": "last",
+          "frame": [
+            "RANGE",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": true,
+      "sort_sql": "f_timestamp DESC",
+      "type_oids": [
+        23,
+        1114,
+        23,
+        23
+      ],
+      "sql": "select id, f_timestamp, first_value(id) over w, last_value(id) over w\nfrom datetimes\nwindow w as (order by f_timestamp desc range between\n             '1 year' preceding and '1 year' following);",
+      "columns": [
+        "id",
+        "f_timestamp",
+        "first_value",
+        "last_value"
+      ]
+    },
+    {
+      "sql_line": 986,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        3,
+        4
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "GROUPS",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "lead"
+        },
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "GROUPS",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select first_value(salary) over(order by enroll_date groups between 1 preceding and 1 following),\n\tlead(salary) over(order by enroll_date groups between 1 preceding and 1 following),\n\tnth_value(salary, 1) over(order by enroll_date groups between 1 preceding and 1 following),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "first_value",
+        "lead",
+        "nth_value",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 991,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        2,
+        3
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "last",
+          "frame": [
+            "GROUPS",
+            -1,
+            1,
+            "NO OTHERS"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "lag"
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select last_value(salary) over(order by enroll_date groups between 1 preceding and 1 following),\n\tlag(salary) over(order by enroll_date groups between 1 preceding and 1 following),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "last_value",
+        "lag",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 995,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        3,
+        4
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "first",
+          "frame": [
+            "GROUPS",
+            1,
+            3,
+            "CURRENT ROW"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "lead"
+        },
+        {
+          "column": 2,
+          "name": "first",
+          "frame": [
+            "GROUPS",
+            1,
+            3,
+            "TIES"
+          ]
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select first_value(salary) over(order by enroll_date groups between 1 following and 3 following\n\texclude current row),\n\tlead(salary) over(order by enroll_date groups between 1 following and 3 following exclude ties),\n\tnth_value(salary, 1) over(order by enroll_date groups between 1 following and 3 following\n\texclude ties),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "first_value",
+        "lead",
+        "nth_value",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 1002,
+      "kind": "frame",
+      "dataset": "employees",
+      "input_columns": [
+        2,
+        3
+      ],
+      "functions": [
+        {
+          "column": 0,
+          "name": "last",
+          "frame": [
+            "GROUPS",
+            1,
+            3,
+            "GROUP"
+          ]
+        },
+        {
+          "column": 1,
+          "name": "lag"
+        }
+      ],
+      "descending": false,
+      "sort_sql": "enroll_date",
+      "type_oids": [
+        23,
+        23,
+        23,
+        1082
+      ],
+      "sql": "select last_value(salary) over(order by enroll_date groups between 1 following and 3 following\n\texclude group),\n\tlag(salary) over(order by enroll_date groups between 1 following and 3 following exclude group),\n\tsalary, enroll_date from empsalary;",
+      "columns": [
+        "last_value",
+        "lag",
+        "salary",
+        "enroll_date"
+      ]
+    },
+    {
+      "sql_line": 1171,
+      "kind": "partition_ranks",
+      "type_oids": [
+        20,
+        1043,
+        20,
+        20,
+        20
+      ],
+      "sql": "SELECT\n    empno,\n    depname,\n    row_number() OVER (PARTITION BY depname ORDER BY enroll_date) rn,\n    rank() OVER (PARTITION BY depname ORDER BY enroll_date ROWS BETWEEN\n                 UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) rnk,\n    count(*) OVER (PARTITION BY depname ORDER BY enroll_date RANGE BETWEEN\n                   CURRENT ROW AND CURRENT ROW) cnt\nFROM empsalary;",
+      "columns": [
+        "empno",
+        "depname",
+        "rn",
+        "rnk",
+        "cnt"
+      ]
+    },
+    {
+      "sql_line": 1415,
+      "kind": "partition_representative",
+      "type_oids": [
+        1043,
+        20,
+        23,
+        1082,
+        20,
+        20,
+        20,
+        20,
+        23
+      ],
+      "sql": "SELECT * FROM\n  (SELECT *,\n          count(salary) OVER (PARTITION BY depname || '') c1, -- w1\n          row_number() OVER (PARTITION BY depname) rn, -- w2\n          count(*) OVER (PARTITION BY depname) c2, -- w2\n          count(*) OVER (PARTITION BY '' || depname) c3, -- w3\n          ntile(2) OVER (PARTITION BY depname) nt -- w2\n   FROM empsalary\n) e WHERE rn <= 1 AND c1 <= 3 AND nt < 2;",
+      "columns": [
+        "depname",
+        "empno",
+        "salary",
+        "enroll_date",
+        "c1",
+        "rn",
+        "c2",
+        "c3",
+        "nt"
+      ]
+    },
+    {
+      "sql_line": 1652,
+      "kind": "opposite_filtered_ranks",
+      "type_oids": [
+        1043,
+        20,
+        23,
+        1082,
+        20,
+        20
+      ],
+      "sql": "SELECT * FROM\n  (SELECT depname,\n          empno,\n          salary,\n          enroll_date,\n          row_number() OVER (PARTITION BY depname ORDER BY enroll_date) AS first_emp,\n          row_number() OVER (PARTITION BY depname ORDER BY enroll_date DESC) AS last_emp\n   FROM empsalary) emp\nWHERE first_emp = 1 OR last_emp = 1;",
+      "columns": [
+        "depname",
+        "empno",
+        "salary",
+        "enroll_date",
+        "first_emp",
+        "last_emp"
+      ]
+    }
+  ]
+}
