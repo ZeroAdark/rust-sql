@@ -38,4 +38,4 @@ python3 scripts/validation/admission_probe.py \
 
 The probe uses a reloadable configuration file: a command-line `-c max_active_queries=...` setting takes precedence over `ALTER SYSTEM` and cannot demonstrate a successful reload. The optional full-server CI job runs this probe. Source and binary hashes, raw reports and retained cluster logs accompany the validation evidence.
 
-These checks validate admission behavior, not a production capacity or memory limit. Connection-queue saturation, large spills, memory-pressure recovery, long-duration overload and representative Linux-server qualification remain separate gates in [production readiness](production-readiness.md).
+These checks validate admission behavior, not a production capacity or memory limit. Connection-queue saturation now has a separate [implementation and probe](connection-queue.md). Smaller-memory connection pressure, large spills, memory-pressure recovery, long-duration overload and representative Linux-server qualification remain separate gates in [production readiness](production-readiness.md).

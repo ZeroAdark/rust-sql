@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: rustup toolchain install 1.96.0 --profile minimal
-      - run: cargo test --locked -j 2 -p gravity_program -p pgsync
+      - run: cargo test --locked -j 2 -p gravity_program -p pgsync -p lmgr_proc
       - run: python3 -m py_compile scripts/validation/*.py
       - run: python3 -m unittest discover -s scripts/validation -p 'test_*.py'
       - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
@@ -76,6 +76,8 @@ jobs:
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/explain-contract.json
           python3 scripts/validation/admission_probe.py --candidate target/release \
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/admission.json
+          python3 scripts/validation/connection_queue_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/connection-queue.json
           python3 scripts/validation/choice_contract.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/choice-contract.json
