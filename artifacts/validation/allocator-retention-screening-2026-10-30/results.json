@@ -1,0 +1,92 @@
+{
+  "pg-serial-pilot-20261030": {
+    "postgresql": {
+      "trials": 1,
+      "cpu_ms_per_bundle": 192.64536666666666,
+      "charged_mib": 232.5703125,
+      "pss_mib": 102.837890625,
+      "p99_ms": {
+        "read": 4.033459,
+        "update": 11.516038,
+        "aggregate": 203.796824,
+        "range": 98.264193,
+        "join": 310.343956,
+        "bundle": 610.611559
+      }
+    },
+    "rustsql": {
+      "trials": 1,
+      "cpu_ms_per_bundle": 14.919083333333335,
+      "charged_mib": 415.234375,
+      "pss_mib": 438.1953125,
+      "p99_ms": {
+        "read": 4.328699,
+        "update": 7.159528,
+        "aggregate": 10.019925,
+        "range": 6.582768,
+        "join": 17.214457,
+        "bundle": 38.405735
+      }
+    }
+  },
+  "pg-serial-medium-pilot-20261030": {
+    "postgresql": {
+      "trials": 3,
+      "cpu_ms_per_bundle": 193.02748333333335,
+      "charged_mib": 223.73828125,
+      "pss_mib": 93.6005859375,
+      "p99_ms": {
+        "read": 0.392899,
+        "update": 1.171764,
+        "aggregate": 31.394446,
+        "range": 13.234613,
+        "join": 44.953097,
+        "bundle": 85.126038
+      }
+    },
+    "rustsql": {
+      "trials": 3,
+      "cpu_ms_per_bundle": 16.43797777777778,
+      "charged_mib": 415.953125,
+      "pss_mib": 443.6416015625,
+      "p99_ms": {
+        "read": 0.487769,
+        "update": 1.235303,
+        "aggregate": 6.361941,
+        "range": 0.984446,
+        "join": 10.573435,
+        "bundle": 24.897839
+      }
+    }
+  },
+  "pg-zero-reserve-medium-20261030": {
+    "postgresql": {
+      "trials": 3,
+      "cpu_ms_per_bundle": 193.40988333333334,
+      "charged_mib": 223.85546875,
+      "pss_mib": 92.7470703125,
+      "p99_ms": {
+        "read": 0.409853,
+        "update": 1.162243,
+        "aggregate": 29.814435,
+        "range": 13.316635,
+        "join": 44.931706,
+        "bundle": 89.327116
+      }
+    },
+    "rustsql": {
+      "trials": 3,
+      "cpu_ms_per_bundle": 17.779855555555553,
+      "charged_mib": 460.5859375,
+      "pss_mib": 484.990234375,
+      "p99_ms": {
+        "read": 0.54251,
+        "update": 1.303912,
+        "aggregate": 4.634888,
+        "range": 1.284638,
+        "join": 6.079956,
+        "bundle": 20.542374
+      }
+    }
+  }
+}

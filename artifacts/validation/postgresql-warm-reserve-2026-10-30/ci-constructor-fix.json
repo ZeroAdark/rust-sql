@@ -1,0 +1,37 @@
+{
+  "source": "https://api.github.com/repos/ZeroAdark/rust-sql/actions/runs/41131490568/jobs?per_page=100",
+  "head_sha": "db6830c3cea21408d458b9bc41c352bf75f1e2f6",
+  "run_id": 41131490568,
+  "jobs": [
+    {
+      "name": "server",
+      "id": 124323270354,
+      "head_sha": "db6830c3cea21408d458b9bc41c352bf75f1e2f6",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-30T21:30:07Z",
+      "completed_at": "2026-10-30T22:20:59Z",
+      "html_url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41131490568/job/124323270354"
+    },
+    {
+      "name": "dependencies",
+      "id": 124323270597,
+      "head_sha": "db6830c3cea21408d458b9bc41c352bf75f1e2f6",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-30T21:30:07Z",
+      "completed_at": "2026-10-30T21:33:48Z",
+      "html_url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41131490568/job/124323270597"
+    },
+    {
+      "name": "unit",
+      "id": 124323270619,
+      "head_sha": "db6830c3cea21408d458b9bc41c352bf75f1e2f6",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-30T21:30:07Z",
+      "completed_at": "2026-10-30T21:31:42Z",
+      "html_url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41131490568/job/124323270619"
+    }
+  ]
+}

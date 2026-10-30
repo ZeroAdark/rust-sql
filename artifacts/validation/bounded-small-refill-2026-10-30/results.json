@@ -1,0 +1,753 @@
+{
+  "capacity": {
+    "postgresql": {
+      "cpu_ms_per_bundle": {
+        "median": 193.2858733333333,
+        "minimum": 191.85895666666667,
+        "maximum": 193.69394666666665
+      },
+      "statements_per_second": {
+        "median": 360.9218020327124,
+        "minimum": 359.3702597043258,
+        "maximum": 362.1252799678529
+      },
+      "server_cpu_percent_of_four_cores": {
+        "median": 91.67759361229719,
+        "minimum": 91.40537482714826,
+        "maximum": 91.87124705859517
+      },
+      "client_cpu_percent_of_two_cores": {
+        "median": 3.0098741482787683,
+        "minimum": 2.9444253860426812,
+        "maximum": 3.0427322561524637
+      },
+      "peak_cgroup_mib": {
+        "median": 232.546875,
+        "minimum": 232.2578125,
+        "maximum": 232.96484375
+      },
+      "peak_process_pss_mib": {
+        "median": 99.947265625,
+        "minimum": 99.7578125,
+        "maximum": 104.458984375
+      },
+      "read_p50_ms": {
+        "median": 0.142081,
+        "minimum": 0.141041,
+        "maximum": 0.143251
+      },
+      "read_p95_ms": {
+        "median": 0.729009,
+        "minimum": 0.418878,
+        "maximum": 3.247959
+      },
+      "read_p99_ms": {
+        "median": 5.858789,
+        "minimum": 5.593162,
+        "maximum": 6.817275
+      },
+      "update_p50_ms": {
+        "median": 0.595258,
+        "minimum": 0.582323,
+        "maximum": 0.614391
+      },
+      "update_p95_ms": {
+        "median": 4.925396,
+        "minimum": 4.58273,
+        "maximum": 5.99943
+      },
+      "update_p99_ms": {
+        "median": 10.079074,
+        "minimum": 8.852422,
+        "maximum": 11.496748
+      },
+      "aggregate_p50_ms": {
+        "median": 92.837383,
+        "minimum": 90.941636,
+        "maximum": 95.243644
+      },
+      "aggregate_p95_ms": {
+        "median": 192.65553,
+        "minimum": 190.822507,
+        "maximum": 194.143772
+      },
+      "aggregate_p99_ms": {
+        "median": 218.019204,
+        "minimum": 206.608258,
+        "maximum": 224.871546
+      },
+      "range_p50_ms": {
+        "median": 39.346685,
+        "minimum": 39.033053,
+        "maximum": 39.497774
+      },
+      "range_p95_ms": {
+        "median": 70.809836,
+        "minimum": 67.939717,
+        "maximum": 71.245582
+      },
+      "range_p99_ms": {
+        "median": 87.558582,
+        "minimum": 82.763845,
+        "maximum": 90.036961
+      },
+      "join_p50_ms": {
+        "median": 125.213574,
+        "minimum": 124.537429,
+        "maximum": 128.046474
+      },
+      "join_p95_ms": {
+        "median": 301.084243,
+        "minimum": 286.68974,
+        "maximum": 313.046698
+      },
+      "join_p99_ms": {
+        "median": 329.944746,
+        "minimum": 328.566067,
+        "maximum": 345.165702
+      },
+      "bundle_p50_ms": {
+        "median": 275.943517,
+        "minimum": 272.29189,
+        "maximum": 280.012962
+      },
+      "bundle_p95_ms": {
+        "median": 508.296199,
+        "minimum": 494.324914,
+        "maximum": 539.994948
+      },
+      "bundle_p99_ms": {
+        "median": 587.633015,
+        "minimum": 566.133144,
+        "maximum": 604.745256
+      }
+    },
+    "rustsql-baseline": {
+      "cpu_ms_per_bundle": {
+        "median": 15.344643333333334,
+        "minimum": 15.210916666666666,
+        "maximum": 15.490936666666666
+      },
+      "statements_per_second": {
+        "median": 4093.7113117124295,
+        "minimum": 3982.114504562437,
+        "maximum": 4160.0334537921135
+      },
+      "server_cpu_percent_of_four_cores": {
+        "median": 83.11317295191316,
+        "minimum": 81.16668893367293,
+        "maximum": 83.99240737259841
+      },
+      "client_cpu_percent_of_two_cores": {
+        "median": 27.97456457772648,
+        "minimum": 27.246360987624925,
+        "maximum": 28.281367079739766
+      },
+      "peak_cgroup_mib": {
+        "median": 490.18359375,
+        "minimum": 476.0,
+        "maximum": 510.6015625
+      },
+      "peak_process_pss_mib": {
+        "median": 516.845703125,
+        "minimum": 503.2431640625,
+        "maximum": 535.869140625
+      },
+      "read_p50_ms": {
+        "median": 0.201677,
+        "minimum": 0.199618,
+        "maximum": 0.208328
+      },
+      "read_p95_ms": {
+        "median": 1.977799,
+        "minimum": 1.519174,
+        "maximum": 2.292767
+      },
+      "read_p99_ms": {
+        "median": 4.44001,
+        "minimum": 4.199402,
+        "maximum": 4.695848
+      },
+      "update_p50_ms": {
+        "median": 1.082257,
+        "minimum": 1.03758,
+        "maximum": 1.14916
+      },
+      "update_p95_ms": {
+        "median": 5.347611,
+        "minimum": 5.119494,
+        "maximum": 5.471735
+      },
+      "update_p99_ms": {
+        "median": 7.291517,
+        "minimum": 6.55806,
+        "maximum": 7.636071
+      },
+      "aggregate_p50_ms": {
+        "median": 4.760459,
+        "minimum": 4.48588,
+        "maximum": 4.841262
+      },
+      "aggregate_p95_ms": {
+        "median": 9.958106,
+        "minimum": 9.33245,
+        "maximum": 10.284256
+      },
+      "aggregate_p99_ms": {
+        "median": 12.053092,
+        "minimum": 11.077035,
+        "maximum": 12.880514
+      },
+      "range_p50_ms": {
+        "median": 0.605735,
+        "minimum": 0.598584,
+        "maximum": 0.616232
+      },
+      "range_p95_ms": {
+        "median": 4.158144,
+        "minimum": 3.479587,
+        "maximum": 4.723848
+      },
+      "range_p99_ms": {
+        "median": 5.808017,
+        "minimum": 4.955139,
+        "maximum": 6.719481
+      },
+      "join_p50_ms": {
+        "median": 7.28077,
+        "minimum": 6.847467,
+        "maximum": 7.630547
+      },
+      "join_p95_ms": {
+        "median": 12.711576,
+        "minimum": 12.509975,
+        "maximum": 13.117465
+      },
+      "join_p99_ms": {
+        "median": 15.274704,
+        "minimum": 14.515016,
+        "maximum": 15.847441
+      },
+      "bundle_p50_ms": {
+        "median": 26.992229,
+        "minimum": 26.666774,
+        "maximum": 28.218812
+      },
+      "bundle_p95_ms": {
+        "median": 36.71617,
+        "minimum": 35.443464,
+        "maximum": 37.419787
+      },
+      "bundle_p99_ms": {
+        "median": 38.94391,
+        "minimum": 38.444918,
+        "maximum": 39.824671
+      }
+    },
+    "rustsql": {
+      "cpu_ms_per_bundle": {
+        "median": 15.390986666666667,
+        "minimum": 15.278453333333333,
+        "maximum": 15.599443333333333
+      },
+      "statements_per_second": {
+        "median": 4055.6867650863446,
+        "minimum": 3978.9699237356135,
+        "maximum": 4132.287613536678
+      },
+      "server_cpu_percent_of_four_cores": {
+        "median": 81.87738072617493,
+        "minimum": 81.64343177150737,
+        "maximum": 83.64768702446834
+      },
+      "client_cpu_percent_of_two_cores": {
+        "median": 27.611435682505075,
+        "minimum": 27.324292550947742,
+        "maximum": 28.424266582944686
+      },
+      "peak_cgroup_mib": {
+        "median": 498.7265625,
+        "minimum": 478.7734375,
+        "maximum": 508.453125
+      },
+      "peak_process_pss_mib": {
+        "median": 524.4755859375,
+        "minimum": 505.7646484375,
+        "maximum": 529.451171875
+      },
+      "read_p50_ms": {
+        "median": 0.201749,
+        "minimum": 0.198423,
+        "maximum": 0.20944
+      },
+      "read_p95_ms": {
+        "median": 1.913806,
+        "minimum": 1.376506,
+        "maximum": 2.188014
+      },
+      "read_p99_ms": {
+        "median": 4.462955,
+        "minimum": 4.393399,
+        "maximum": 4.542052
+      },
+      "update_p50_ms": {
+        "median": 1.051431,
+        "minimum": 1.000096,
+        "maximum": 1.146187
+      },
+      "update_p95_ms": {
+        "median": 5.265551,
+        "minimum": 5.227217,
+        "maximum": 5.36393
+      },
+      "update_p99_ms": {
+        "median": 7.013275,
+        "minimum": 6.650795,
+        "maximum": 7.331769
+      },
+      "aggregate_p50_ms": {
+        "median": 4.764471,
+        "minimum": 4.301026,
+        "maximum": 5.152736
+      },
+      "aggregate_p95_ms": {
+        "median": 9.539293,
+        "minimum": 9.123481,
+        "maximum": 10.901955
+      },
+      "aggregate_p99_ms": {
+        "median": 11.997045,
+        "minimum": 11.124947,
+        "maximum": 12.856084
+      },
+      "range_p50_ms": {
+        "median": 0.622359,
+        "minimum": 0.601385,
+        "maximum": 0.660737
+      },
+      "range_p95_ms": {
+        "median": 4.397862,
+        "minimum": 4.122675,
+        "maximum": 4.561492
+      },
+      "range_p99_ms": {
+        "median": 5.839083,
+        "minimum": 5.584711,
+        "maximum": 6.034655
+      },
+      "join_p50_ms": {
+        "median": 7.019504,
+        "minimum": 6.703577,
+        "maximum": 7.717842
+      },
+      "join_p95_ms": {
+        "median": 13.43623,
+        "minimum": 11.916731,
+        "maximum": 13.788479
+      },
+      "join_p99_ms": {
+        "median": 15.877628,
+        "minimum": 13.742569,
+        "maximum": 18.090473
+      },
+      "bundle_p50_ms": {
+        "median": 27.303146,
+        "minimum": 26.597959,
+        "maximum": 27.382523
+      },
+      "bundle_p95_ms": {
+        "median": 36.640899,
+        "minimum": 35.375342,
+        "maximum": 37.772426
+      },
+      "bundle_p99_ms": {
+        "median": 41.319771,
+        "minimum": 39.292701,
+        "maximum": 42.931024
+      }
+    }
+  },
+  "medium": {
+    "postgresql": {
+      "cpu_ms_per_bundle": {
+        "median": 195.0813722222222,
+        "minimum": 194.6036611111111,
+        "maximum": 198.32283333333334
+      },
+      "statements_per_second": {
+        "median": 178.84780179378745,
+        "minimum": 178.83506974868814,
+        "maximum": 178.86979736530196
+      },
+      "server_cpu_percent_of_four_cores": {
+        "median": 45.90699272957847,
+        "minimum": 45.80094398617149,
+        "maximum": 46.667207542005414
+      },
+      "client_cpu_percent_of_two_cores": {
+        "median": 1.7444864289901891,
+        "minimum": 1.7166774238259241,
+        "maximum": 1.7535830081702521
+      },
+      "peak_cgroup_mib": {
+        "median": 223.8046875,
+        "minimum": 223.5546875,
+        "maximum": 223.82421875
+      },
+      "peak_process_pss_mib": {
+        "median": 94.10546875,
+        "minimum": 92.6552734375,
+        "maximum": 99.2490234375
+      },
+      "schedule_lag_p99_ms": {
+        "median": 7.047782,
+        "minimum": 5.901294,
+        "maximum": 8.252413
+      },
+      "read_p50_ms": {
+        "median": 0.165493,
+        "minimum": 0.164128,
+        "maximum": 0.16624
+      },
+      "read_p95_ms": {
+        "median": 0.310564,
+        "minimum": 0.304953,
+        "maximum": 0.323182
+      },
+      "read_p99_ms": {
+        "median": 0.40967,
+        "minimum": 0.402671,
+        "maximum": 0.420113
+      },
+      "update_p50_ms": {
+        "median": 0.680259,
+        "minimum": 0.673899,
+        "maximum": 0.694928
+      },
+      "update_p95_ms": {
+        "median": 1.085622,
+        "minimum": 1.072306,
+        "maximum": 1.105231
+      },
+      "update_p99_ms": {
+        "median": 1.17565,
+        "minimum": 1.173064,
+        "maximum": 1.198718
+      },
+      "aggregate_p50_ms": {
+        "median": 24.616802,
+        "minimum": 24.56627,
+        "maximum": 24.847223
+      },
+      "aggregate_p95_ms": {
+        "median": 26.729966,
+        "minimum": 25.710782,
+        "maximum": 27.764976
+      },
+      "aggregate_p99_ms": {
+        "median": 29.130977,
+        "minimum": 28.679014,
+        "maximum": 29.921608
+      },
+      "range_p50_ms": {
+        "median": 9.703519,
+        "minimum": 9.640334,
+        "maximum": 9.948814
+      },
+      "range_p95_ms": {
+        "median": 10.414393,
+        "minimum": 10.18127,
+        "maximum": 10.575971
+      },
+      "range_p99_ms": {
+        "median": 12.187038,
+        "minimum": 10.992556,
+        "maximum": 13.332336
+      },
+      "join_p50_ms": {
+        "median": 36.597049,
+        "minimum": 36.530409,
+        "maximum": 37.635851
+      },
+      "join_p95_ms": {
+        "median": 41.826465,
+        "minimum": 41.364816,
+        "maximum": 42.208498
+      },
+      "join_p99_ms": {
+        "median": 45.269911,
+        "minimum": 44.128589,
+        "maximum": 48.073199
+      },
+      "bundle_p50_ms": {
+        "median": 77.039921,
+        "minimum": 76.693167,
+        "maximum": 78.156292
+      },
+      "bundle_p95_ms": {
+        "median": 82.41375,
+        "minimum": 81.783434,
+        "maximum": 83.012019
+      },
+      "bundle_p99_ms": {
+        "median": 86.50363,
+        "minimum": 86.176893,
+        "maximum": 88.307076
+      }
+    },
+    "rustsql-baseline": {
+      "cpu_ms_per_bundle": {
+        "median": 17.534344444444443,
+        "minimum": 17.27555,
+        "maximum": 17.6964
+      },
+      "statements_per_second": {
+        "median": 179.41229332457854,
+        "minimum": 179.3763777532103,
+        "maximum": 179.43745805366095
+      },
+      "server_cpu_percent_of_four_cores": {
+        "median": 4.138483148317857,
+        "minimum": 4.078790497998582,
+        "maximum": 4.176990791823437
+      },
+      "client_cpu_percent_of_two_cores": {
+        "median": 1.6910736530141666,
+        "minimum": 1.6795451008008662,
+        "maximum": 1.7003155268866497
+      },
+      "peak_cgroup_mib": {
+        "median": 477.484375,
+        "minimum": 420.03515625,
+        "maximum": 485.9921875
+      },
+      "peak_process_pss_mib": {
+        "median": 504.572265625,
+        "minimum": 447.25,
+        "maximum": 513.0205078125
+      },
+      "schedule_lag_p99_ms": {
+        "median": 7.525202,
+        "minimum": 7.274688,
+        "maximum": 14.535785
+      },
+      "read_p50_ms": {
+        "median": 0.231675,
+        "minimum": 0.224671,
+        "maximum": 0.234199
+      },
+      "read_p95_ms": {
+        "median": 0.404063,
+        "minimum": 0.38753,
+        "maximum": 0.407286
+      },
+      "read_p99_ms": {
+        "median": 0.506062,
+        "minimum": 0.484519,
+        "maximum": 0.511689
+      },
+      "update_p50_ms": {
+        "median": 0.768584,
+        "minimum": 0.762545,
+        "maximum": 0.78569
+      },
+      "update_p95_ms": {
+        "median": 1.143055,
+        "minimum": 1.136777,
+        "maximum": 1.163151
+      },
+      "update_p99_ms": {
+        "median": 1.254695,
+        "minimum": 1.23617,
+        "maximum": 1.28648
+      },
+      "aggregate_p50_ms": {
+        "median": 3.558865,
+        "minimum": 3.523169,
+        "maximum": 3.583414
+      },
+      "aggregate_p95_ms": {
+        "median": 3.873352,
+        "minimum": 3.831751,
+        "maximum": 4.000906
+      },
+      "aggregate_p99_ms": {
+        "median": 4.148639,
+        "minimum": 4.09769,
+        "maximum": 4.395647
+      },
+      "range_p50_ms": {
+        "median": 0.679696,
+        "minimum": 0.669598,
+        "maximum": 0.707526
+      },
+      "range_p95_ms": {
+        "median": 0.877472,
+        "minimum": 0.811561,
+        "maximum": 0.913472
+      },
+      "range_p99_ms": {
+        "median": 1.064007,
+        "minimum": 1.00521,
+        "maximum": 1.107873
+      },
+      "join_p50_ms": {
+        "median": 5.008931,
+        "minimum": 4.930866,
+        "maximum": 5.073094
+      },
+      "join_p95_ms": {
+        "median": 5.234279,
+        "minimum": 5.182107,
+        "maximum": 5.349646
+      },
+      "join_p99_ms": {
+        "median": 5.45198,
+        "minimum": 5.244337,
+        "maximum": 5.682854
+      },
+      "bundle_p50_ms": {
+        "median": 16.142616,
+        "minimum": 15.844175,
+        "maximum": 16.379305
+      },
+      "bundle_p95_ms": {
+        "median": 16.968564,
+        "minimum": 16.825737,
+        "maximum": 17.116897
+      },
+      "bundle_p99_ms": {
+        "median": 17.453332,
+        "minimum": 17.313762,
+        "maximum": 17.611728
+      }
+    },
+    "rustsql": {
+      "cpu_ms_per_bundle": {
+        "median": 17.657283333333332,
+        "minimum": 17.45186111111111,
+        "maximum": 17.79805
+      },
+      "statements_per_second": {
+        "median": 179.41571311726332,
+        "minimum": 179.38796328768115,
+        "maximum": 179.4360465771716
+      },
+      "server_cpu_percent_of_four_cores": {
+        "median": 4.1688856771398894,
+        "minimum": 4.1193746979219865,
+        "maximum": 4.201809766462196
+      },
+      "client_cpu_percent_of_two_cores": {
+        "median": 1.6863060519005477,
+        "minimum": 1.6827902271905602,
+        "maximum": 1.7055445809922298
+      },
+      "peak_cgroup_mib": {
+        "median": 485.515625,
+        "minimum": 395.5703125,
+        "maximum": 499.73046875
+      },
+      "peak_process_pss_mib": {
+        "median": 512.607421875,
+        "minimum": 418.7626953125,
+        "maximum": 527.0859375
+      },
+      "schedule_lag_p99_ms": {
+        "median": 11.169696,
+        "minimum": 7.590545,
+        "maximum": 24.928409
+      },
+      "read_p50_ms": {
+        "median": 0.23201,
+        "minimum": 0.224947,
+        "maximum": 0.233972
+      },
+      "read_p95_ms": {
+        "median": 0.393252,
+        "minimum": 0.38562,
+        "maximum": 0.410945
+      },
+      "read_p99_ms": {
+        "median": 0.482308,
+        "minimum": 0.475153,
+        "maximum": 0.52404
+      },
+      "update_p50_ms": {
+        "median": 0.771759,
+        "minimum": 0.762907,
+        "maximum": 0.773568
+      },
+      "update_p95_ms": {
+        "median": 1.136545,
+        "minimum": 1.127217,
+        "maximum": 1.159414
+      },
+      "update_p99_ms": {
+        "median": 1.218868,
+        "minimum": 1.204037,
+        "maximum": 1.364307
+      },
+      "aggregate_p50_ms": {
+        "median": 3.576069,
+        "minimum": 3.555615,
+        "maximum": 3.601756
+      },
+      "aggregate_p95_ms": {
+        "median": 3.894867,
+        "minimum": 3.850286,
+        "maximum": 3.971234
+      },
+      "aggregate_p99_ms": {
+        "median": 4.180587,
+        "minimum": 4.151491,
+        "maximum": 4.310254
+      },
+      "range_p50_ms": {
+        "median": 0.681417,
+        "minimum": 0.676066,
+        "maximum": 0.716984
+      },
+      "range_p95_ms": {
+        "median": 0.872932,
+        "minimum": 0.854905,
+        "maximum": 0.939375
+      },
+      "range_p99_ms": {
+        "median": 1.063495,
+        "minimum": 1.018676,
+        "maximum": 1.282169
+      },
+      "join_p50_ms": {
+        "median": 5.016896,
+        "minimum": 4.987807,
+        "maximum": 5.051139
+      },
+      "join_p95_ms": {
+        "median": 5.315825,
+        "minimum": 5.271845,
+        "maximum": 5.397003
+      },
+      "join_p99_ms": {
+        "median": 5.493732,
+        "minimum": 5.442328,
+        "maximum": 5.712239
+      },
+      "bundle_p50_ms": {
+        "median": 16.251065,
+        "minimum": 16.136841,
+        "maximum": 16.435846
+      },
+      "bundle_p95_ms": {
+        "median": 17.057879,
+        "minimum": 16.887678,
+        "maximum": 17.173209
+      },
+      "bundle_p99_ms": {
+        "median": 17.364951,
+        "minimum": 17.052891,
+        "maximum": 18.735435
+      }
+    }
+  }
+}
