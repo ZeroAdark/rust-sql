@@ -1,0 +1,1892 @@
+{
+  "passed": true,
+  "engines": {
+    "native": {
+      "cluster": "/home/rustsql/conformance/compat-m8lluugc",
+      "binary_sha256": "07b16e1aa4f0e2206c37b339b6e4cc813aa8ab9e3c5516334f753b3d90d0c536",
+      "version": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+      "checks": [
+        {
+          "sql_line": 101,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 102,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              false,
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 117,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 118,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              false,
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 133,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 134,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              false,
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 152,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 153,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              true,
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 168,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 169,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              true,
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 184,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 185,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              true,
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 191,
+          "sql_sha256": "ef407fa922d9eb6b676bc4d4542998afb022c7f57c3ab7034a7aa74d756fc515",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 206,
+          "sql_sha256": "3e53c994fb5643d2fea458402ab768ef8354d969a11d9f41769075faad8ba7ff",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 207,
+          "sql_sha256": "d7024c293d6e62961a1f77418e8d3a09d7dfb3b565c6463450ff8c1a6ab0d3f3",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              false,
+              true
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 222,
+          "sql_sha256": "5eaf458e23398c460de3a165a00075ca3e9601bcba8030d299ab1145bdefd9e9",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 223,
+          "sql_sha256": "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              false,
+              true
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 238,
+          "sql_sha256": "5eaf458e23398c460de3a165a00075ca3e9601bcba8030d299ab1145bdefd9e9",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 239,
+          "sql_sha256": "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              false,
+              true
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 259,
+          "sql_sha256": "0e45298c1ffd45ea9deccba0084a788e3c48665138df965af32191429db2861d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 260,
+          "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              2
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 274,
+          "sql_sha256": "0e45298c1ffd45ea9deccba0084a788e3c48665138df965af32191429db2861d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 275,
+          "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              2
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 289,
+          "sql_sha256": "0e45298c1ffd45ea9deccba0084a788e3c48665138df965af32191429db2861d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 290,
+          "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              4
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 304,
+          "sql_sha256": "e4d165179d2406fdf3d38d61f290364461be6264585567757f8e176ecd0b58bc",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              1
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 334,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 337,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              true
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 362,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 365,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 390,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 393,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              true
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 418,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 421,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              false
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 437,
+          "sql_sha256": "451c9c853684c3e026967b0a673f630ed44502a0b8d142287e51de0fbdedd65e",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 446,
+          "sql_sha256": "451c9c853684c3e026967b0a673f630ed44502a0b8d142287e51de0fbdedd65e",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 454,
+          "sql_sha256": "451c9c853684c3e026967b0a673f630ed44502a0b8d142287e51de0fbdedd65e",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 464,
+          "sql_sha256": "c0aeeec91eeeb3294ff01d94948df6dfb001d34a8dea531332ced62fceaf2dc7",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              40000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 473,
+          "sql_sha256": "c0aeeec91eeeb3294ff01d94948df6dfb001d34a8dea531332ced62fceaf2dc7",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              40000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 481,
+          "sql_sha256": "c0aeeec91eeeb3294ff01d94948df6dfb001d34a8dea531332ced62fceaf2dc7",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              40000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 499,
+          "sql_sha256": "be83b2f5b33f9656e59119f381412213536c3bbb783a578322fff487171b76eb",
+          "types": [
+            23
+          ],
+          "values": [
+            [
+              320000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 501,
+          "sql_sha256": "6fe33845b71e01a0a45def25382350c536a2e34ddd89632f48036ef82098916e",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              true
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            23
+          ],
+          "inner_values": [
+            [
+              320000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 526,
+          "sql_sha256": "972b8e5f2086ad81b271aa8b7104b59b9c7d814813513661fa5550279c932393",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              null
+            ],
+            [
+              null,
+              2
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": true
+        },
+        {
+          "sql_line": 534,
+          "sql_sha256": "a5036ff2beb5ce7151a3a00f231be848883616cd3dc2d3ff19b6753f913d4b8d",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              null
+            ],
+            [
+              null,
+              2
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        }
+      ]
+    },
+    "candidate": {
+      "cluster": "/home/rustsql/conformance/compat-qb4__awp",
+      "binary_sha256": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+      "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build 0447a2b) on x86_64-unknown-linux-gnu, 64-bit",
+      "checks": [
+        {
+          "sql_line": 101,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 102,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 117,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 118,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 133,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 134,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 152,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 153,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 168,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 169,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 184,
+          "sql_sha256": "40aac87a346147230f227dbdd3ed88d325d4f204fca6c88f76c319a89c45770d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 185,
+          "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 191,
+          "sql_sha256": "ef407fa922d9eb6b676bc4d4542998afb022c7f57c3ab7034a7aa74d756fc515",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 206,
+          "sql_sha256": "3e53c994fb5643d2fea458402ab768ef8354d969a11d9f41769075faad8ba7ff",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 207,
+          "sql_sha256": "d7024c293d6e62961a1f77418e8d3a09d7dfb3b565c6463450ff8c1a6ab0d3f3",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 222,
+          "sql_sha256": "5eaf458e23398c460de3a165a00075ca3e9601bcba8030d299ab1145bdefd9e9",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 223,
+          "sql_sha256": "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 238,
+          "sql_sha256": "5eaf458e23398c460de3a165a00075ca3e9601bcba8030d299ab1145bdefd9e9",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 239,
+          "sql_sha256": "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877",
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 259,
+          "sql_sha256": "0e45298c1ffd45ea9deccba0084a788e3c48665138df965af32191429db2861d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 260,
+          "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 274,
+          "sql_sha256": "0e45298c1ffd45ea9deccba0084a788e3c48665138df965af32191429db2861d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 275,
+          "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 289,
+          "sql_sha256": "0e45298c1ffd45ea9deccba0084a788e3c48665138df965af32191429db2861d",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 290,
+          "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 304,
+          "sql_sha256": "e4d165179d2406fdf3d38d61f290364461be6264585567757f8e176ecd0b58bc",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              null,
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              20000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 334,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 337,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 362,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 365,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 390,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 393,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 418,
+          "sql_sha256": "406634b5e3f9b0259beae97b4fbc0105183799bb96fb66914a95ed3d4d29d96c",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              3
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 421,
+          "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            20
+          ],
+          "inner_values": [
+            [
+              3
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Hash",
+            "Hash Join",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "sql_line": 437,
+          "sql_sha256": "451c9c853684c3e026967b0a673f630ed44502a0b8d142287e51de0fbdedd65e",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 446,
+          "sql_sha256": "451c9c853684c3e026967b0a673f630ed44502a0b8d142287e51de0fbdedd65e",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 454,
+          "sql_sha256": "451c9c853684c3e026967b0a673f630ed44502a0b8d142287e51de0fbdedd65e",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              20000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 464,
+          "sql_sha256": "c0aeeec91eeeb3294ff01d94948df6dfb001d34a8dea531332ced62fceaf2dc7",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              40000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 473,
+          "sql_sha256": "c0aeeec91eeeb3294ff01d94948df6dfb001d34a8dea531332ced62fceaf2dc7",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              40000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 481,
+          "sql_sha256": "c0aeeec91eeeb3294ff01d94948df6dfb001d34a8dea531332ced62fceaf2dc7",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              40000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 499,
+          "sql_sha256": "be83b2f5b33f9656e59119f381412213536c3bbb783a578322fff487171b76eb",
+          "types": [
+            23
+          ],
+          "values": [
+            [
+              320000
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        },
+        {
+          "sql_line": 501,
+          "sql_sha256": "6fe33845b71e01a0a45def25382350c536a2e34ddd89632f48036ef82098916e",
+          "types": [
+            16
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "kind": "unavailable_metric",
+          "inner_types": [
+            23
+          ],
+          "inner_values": [
+            [
+              320000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Merge Join",
+            "Seq Scan",
+            "Sort"
+          ]
+        },
+        {
+          "sql_line": 526,
+          "sql_sha256": "972b8e5f2086ad81b271aa8b7104b59b9c7d814813513661fa5550279c932393",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              null
+            ],
+            [
+              null,
+              2
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": true
+        },
+        {
+          "sql_line": 534,
+          "sql_sha256": "a5036ff2beb5ce7151a3a00f231be848883616cd3dc2d3ff19b6753f913d4b8d",
+          "types": [
+            23,
+            23
+          ],
+          "values": [
+            [
+              1,
+              null
+            ],
+            [
+              null,
+              2
+            ]
+          ],
+          "kind": "query_data",
+          "ordered": false
+        }
+      ]
+    }
+  },
+  "source_sha256": "5bd0f5f2e74d282c77fa49cd628dfc120627bd546ecaca0adaec1b5c642a73bf",
+  "statements": 255,
+  "full_report_archive_member": "probes/hash/report.json"
+}

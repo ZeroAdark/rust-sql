@@ -115,6 +115,213 @@
           "sql_line": 31
         }
       }
+    },
+    "64fc911fe146edd0111c56e92e2714d7431978f43bdf802bde31cd76aa84d325": {
+      "case": "explain",
+      "reason": "Exact diagnostic-only helper calls; upstream-masked counts are format checks, not measurements. Separate paired probes verify SQL values and unmasked root counters.",
+      "definitions": {
+        "explain_filter": "21c7b827ae3fdb84777044e7d35875880cd2403193655eb13456fa01d472188a",
+        "explain_filter_to_json": "0ffda2d4917ffc48ed2097523b4cea4e27ac67dc9b2d2590dcf26eebab2e0fc4"
+      },
+      "statements": {
+        "98989235f424f5bb051d36b34a7bb121e3b363c60d777f4924b7fa173ae0a55a": {
+          "kind": "masked_explain_json",
+          "header": "jsonb_pretty",
+          "helper": "explain_filter_to_json",
+          "sql_line": 145
+        },
+        "03db494c4aa2eb25db38b0d1ed750ff360447ce85ba53cd5bbd92ecd2cb3c615": {
+          "kind": "masked_text_plan",
+          "header": "explain_filter",
+          "helper": "explain_filter",
+          "root_format": "timed",
+          "sql_line": 183
+        },
+        "e74386ce286d42dd69d8fc08ce4eb1bcc2b2c991c930d516875aafc53ad94c24": {
+          "kind": "masked_text_plan",
+          "header": "explain_filter",
+          "helper": "explain_filter",
+          "root_format": "timed",
+          "sql_line": 186
+        },
+        "4ba7ac82742490c7be9dc735b9a680a447e98ce4fdfd17a93f3ac16b38bf0d43": {
+          "kind": "masked_text_plan",
+          "header": "explain_filter",
+          "helper": "explain_filter",
+          "root_format": "timed",
+          "sql_line": 188
+        }
+      }
+    },
+    "3ed2a5133118ffc8c269555e6823619712a2a6d0a5153eb58002cd9643ec771e": {
+      "case": "partition_prune",
+      "reason": "Exact diagnostic-only helper calls; upstream-masked counts are format checks, not measurements. Separate paired probes verify SQL values and unmasked root counters.",
+      "definitions": {
+        "explain_analyze": "8acc44b1ed713e5e00180e7b1de9dfb0b57ebaec9c0fe0707baf03b95fae55b9",
+        "explain_parallel_append": "1065f8c88715fec56b9c95a433a3cbe046c30e3c3b7c4b69043d037a43e0408f"
+      },
+      "statements": {
+        "1e021a291c1b69f3e3544a2d5cb063ed538cad8e48a89c5dafb11f807040e5cd": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 629
+        },
+        "e68ecd3d8226546cadb2c20608960590eb0d895ea0d1af3b203f35bc24bc54ed": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 635
+        },
+        "f410f00e8f34c52f303b40473bb8d5b0c7956bc666ada4b51c7b827899810998": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 636
+        },
+        "bccbc38ac271c4c2c0dea6ff3ef16a2e24b8da57cc8f449d396108424d367b2c": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 639
+        },
+        "fb1fd29a554b4ebc9568aac2e6f5e4120f6f6b5fff1f17115c810f9732a75708": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 642
+        },
+        "f4cdfcebeaca02532b07bce76746833448ee16235663028dcee79ba800cde64d": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 668
+        },
+        "565aa9d64a45a5823d3a3d61356a592e495090d7656c977235089075f821f5de": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 672
+        },
+        "6b48584792bdc0d4ce79d897f6c3c4a5bcbd7ca576277afe710c66014551d26a": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 676
+        },
+        "cfa2979e9c06d94f2a8a1c61833649c07777b608139079ee6763b6f4c7f9183a": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 677
+        },
+        "ca0671ba752f23cee7db319491bd03a6d4476fde332312dfb165ce3f67c15dd4": {
+          "kind": "text_plan",
+          "header": "explain_analyze",
+          "helper": "explain_analyze",
+          "sql_line": 737
+        },
+        "9f48b664a0b85a3cc25105e2dff56e2e7794457356fb555abf57263b4970a188": {
+          "kind": "text_plan",
+          "header": "explain_analyze",
+          "helper": "explain_analyze",
+          "sql_line": 744
+        },
+        "64955bc273bee33fcfbf1b710f691c6ab96e50c6d76a13c3937b4ef2a356a05a": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 1231
+        },
+        "69925dd4027859910e1e180436cc648f3270dd519544a41bc6afa862e690c0f9": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 1236
+        }
+      }
+    },
+    "5bd0f5f2e74d282c77fa49cd628dfc120627bd546ecaca0adaec1b5c642a73bf": {
+      "case": "join_hash",
+      "reason": "Only projections of absent PostgreSQL hash batch diagnostics may return NULL. Every actual query value and count remains strict.",
+      "definitions": {
+        "find_hash": "3db480c55f0d889167c05fbaec3a8b3e68041beca30cd005f8106859040979cd",
+        "hash_join_batches": "d69b55fc1db6e8422c215dd5ca38796a1b7fa7907d11702e15b350f56f264643"
+      },
+      "statements": {
+        "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "initially_multibatch",
+            "increased_batches"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 102
+        },
+        "d7024c293d6e62961a1f77418e8d3a09d7dfb3b565c6463450ff8c1a6ab0d3f3": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "initially_multibatch",
+            "increased_batches"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 207
+        },
+        "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "initially_multibatch",
+            "increased_batches"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 223
+        },
+        "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "original",
+            "final"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 260
+        },
+        "e4d165179d2406fdf3d38d61f290364461be6264585567757f8e176ecd0b58bc": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "original",
+            "final"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 304
+        },
+        "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "multibatch"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 337
+        },
+        "6fe33845b71e01a0a45def25382350c536a2e34ddd89632f48036ef82098916e": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "multibatch"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 501
+        }
+      }
     }
   }
 }

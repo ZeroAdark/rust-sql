@@ -1,10 +1,11 @@
 # Reviewed diagnostic expectations and SQL choice proofs
 
-These fourteen profiles change 69 complete diagnostic tables under the owner's
-SQL/protocol compatibility contract: 57 direct EXPLAIN tables, 11 results of
-reviewed EXPLAIN wrappers, and one allocator inventory query. They do not replace
-vendor SQL or expected files. Measured root rows/loops cannot change or disappear;
-the two incremental-sort JSON projections also retain their measured counts.
+These seventeen profiles change 123 complete diagnostic tables under the owner's
+SQL/protocol compatibility contract: 75 direct EXPLAIN tables, 29 plan-wrapper
+results, 18 projections of unavailable hash metrics and one allocator inventory.
+They do not replace vendor SQL or expected files. Measured root rows/loops cannot
+change or disappear where the upstream helper retains them. Existing upstream
+numeric placeholders are checked as formatting, never used as measurement evidence.
 
 | Case | Tables | Reviewed difference |
 | --- | ---: | --- |
@@ -22,17 +23,34 @@ the two incremental-sort JSON projections also retain their measured counts.
 | incremental_sort | 17 | Thirteen direct plans, two text wrappers and two JSON plan projections |
 | sysviews | 1 | No PostgreSQL `Caller tuples` context in the engine cursor allocation path |
 | groupingsets | 8 | Grouping-set union alternatives and their inherited first-arm expression labels |
+| explain | 4 | One upstream-filtered JSON plan and three window-plan wrappers |
+| partition_prune | 17 | Three direct plans, twelve parallel wrappers and two UPDATE wrappers |
+| join_hash | 33 | Fifteen direct plans and eighteen NULL projections of unavailable batch measurements |
 
 Each profile binds the whole SQL source, original expectation, statement occurrence
 and original plan table by SHA-256. Replacements are exact aligned plan tables;
 there are no regular-expression masks. The verifier rejects changed inputs,
 non-EXPLAIN replacements, missing echoes, duplicate replacements and appended
 statements. The separate [diagnostic policy](policy/diagnostics.json) binds the
-complete source, five helper definitions and twelve exact diagnostic calls. A
+complete source, eleven helper definitions and 36 unique diagnostic statements. A
 profile cannot grant permission to arbitrary helpers or scalar queries. The only
 allocator observation accepts an empty result; the companion live probe checks
 cursor values, byte accounting and view permissions. Errors, notices and other
 data remain strict. A profile never grows when new output is encountered.
+
+The additional filtered-helper formats validate exact upstream root placeholders
+and zeroed JSON counters throughout the plan. Hash metric replacements must be
+exactly one row of SQL NULLs with the pinned columns; false, zero, missing rows or
+other values are rejected. These scalar diagnostics are reported separately from
+plan tables. The unfiltered companion checks actual typed values and root counts,
+including the original tenk fixture, constrained windows, nonempty partition
+queries, UPDATE routing and the 255-statement hash diagnostic transaction.
+
+Owned-cluster corruption controls verify runtime pruning at both partition levels:
+eight excluded heap files are corrupted while stopped, a prepared generic query
+still returns the two healthy rows, selecting either corrupted partition fails
+with XX001, and exact file restoration recovers all eleven rows. This is a bounded
+read-corruption check, not a complete storage-failure campaign.
 
 The [choice policy](policy/choices.json) admits five exact queries already covered
 by live native/candidate probes. `choice_witness.py` proves their captured rows:
@@ -62,7 +80,7 @@ x86-64 as well as the two earlier runs. The full
 auditor first requires every native result to match a pinned PostgreSQL fixture;
 whole-file upstream alternatives cover optional feature/platform branches.
 
-The raw suite remains separate. The reviewed profile accepts 224/231 cases, with
-seven unresolved cases. This is not a complete compatibility or production claim.
+The raw suite remains separate. The reviewed profile accepts 227/231 cases, with
+four unresolved cases. This is not a complete compatibility or production claim.
 See [the investigation](../../docs/compatibility-investigation.md) and
-[retained evidence](../../artifacts/validation/grouping-contract-2026-10-30/README.md).
+[retained evidence](../../artifacts/validation/filtered-diagnostics-2026-10-30/README.md).

@@ -1,0 +1,272 @@
+{
+  "version": 1,
+  "reason": "Reviewed engine plans and eighteen scalar projections of unavailable PostgreSQL hash metrics. Missing measurements remain NULL; query counts and other SQL outputs remain exact.",
+  "source_sha256": "5bd0f5f2e74d282c77fa49cd628dfc120627bd546ecaca0adaec1b5c642a73bf",
+  "expected_sha256": "9e35dc99b985428edc6361d9e2ca91be8f75515b8fd0d7e1123bef4534649d64",
+  "plans": [
+    {
+      "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+      "occurrence": 1,
+      "sql_line": 102,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "20716c99c4ed0f5f52e01e8c23eda27a978f7f8e13baca94238263740e0b8dd7",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "7fa343613484c14c82c005bdf37c2a566050fd78a64a4b9787d80909144874c6",
+      "occurrence": 2,
+      "sql_line": 115,
+      "kind": "text_plan",
+      "before_sha256": "b3d797a0e20e1600d4b6d7e0fe40cb68b57eaf272ca3f9ef0cf6626cd4f47fbc",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on simple s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+      "occurrence": 2,
+      "sql_line": 118,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "20716c99c4ed0f5f52e01e8c23eda27a978f7f8e13baca94238263740e0b8dd7",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "7fa343613484c14c82c005bdf37c2a566050fd78a64a4b9787d80909144874c6",
+      "occurrence": 3,
+      "sql_line": 131,
+      "kind": "text_plan",
+      "before_sha256": "d8c4a5e7a9eda8e46e7167b3d0d1aa721b46f5527e40b758243a20f55a607647",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on simple s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+      "occurrence": 3,
+      "sql_line": 134,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "20716c99c4ed0f5f52e01e8c23eda27a978f7f8e13baca94238263740e0b8dd7",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+      "occurrence": 4,
+      "sql_line": 153,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "0704deef3ec88a15a26d46bbc56ed4448a36ef90189790ab8137dc64e3a0dace",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "7fa343613484c14c82c005bdf37c2a566050fd78a64a4b9787d80909144874c6",
+      "occurrence": 5,
+      "sql_line": 166,
+      "kind": "text_plan",
+      "before_sha256": "b3d797a0e20e1600d4b6d7e0fe40cb68b57eaf272ca3f9ef0cf6626cd4f47fbc",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on simple s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+      "occurrence": 5,
+      "sql_line": 169,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "0704deef3ec88a15a26d46bbc56ed4448a36ef90189790ab8137dc64e3a0dace",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "7fa343613484c14c82c005bdf37c2a566050fd78a64a4b9787d80909144874c6",
+      "occurrence": 6,
+      "sql_line": 182,
+      "kind": "text_plan",
+      "before_sha256": "d8c4a5e7a9eda8e46e7167b3d0d1aa721b46f5527e40b758243a20f55a607647",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on simple s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1",
+      "occurrence": 6,
+      "sql_line": 185,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "0704deef3ec88a15a26d46bbc56ed4448a36ef90189790ab8137dc64e3a0dace",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "d7024c293d6e62961a1f77418e8d3a09d7dfb3b565c6463450ff8c1a6ab0d3f3",
+      "occurrence": 1,
+      "sql_line": 207,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "fa9465baa3c9d7e834e70b2b583e4b415281ec5d4423e326e90389f1de7d7501",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "c7a42ccb53fea30a70d8a6d15a469015fad597267a429f6f894a79ffe4e1b2bc",
+      "occurrence": 1,
+      "sql_line": 220,
+      "kind": "text_plan",
+      "before_sha256": "c78f2af6befeee0d76f64b48e4d3477b7481cbd78403b9248e05f3a585feb57a",
+      "after": "                      QUERY PLAN                      \n------------------------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on bigger_than_it_looks s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877",
+      "occurrence": 1,
+      "sql_line": 223,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "fa9465baa3c9d7e834e70b2b583e4b415281ec5d4423e326e90389f1de7d7501",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "c7a42ccb53fea30a70d8a6d15a469015fad597267a429f6f894a79ffe4e1b2bc",
+      "occurrence": 2,
+      "sql_line": 236,
+      "kind": "text_plan",
+      "before_sha256": "099d3659c32d05686c3f13f02f1f9c0cd6aa626626062eeaee232bfc0dc0a26e",
+      "after": "                      QUERY PLAN                      \n------------------------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on bigger_than_it_looks s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877",
+      "occurrence": 2,
+      "sql_line": 239,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "fa9465baa3c9d7e834e70b2b583e4b415281ec5d4423e326e90389f1de7d7501",
+      "after": " initially_multibatch | increased_batches \n----------------------+-------------------\n                      | \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+      "occurrence": 1,
+      "sql_line": 260,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "1363e1cbd8ea6d4af7a8a7baee46eea9a15609ab5b51ec48ae999b6c4cca73de",
+      "after": " original | final \n----------+-------\n          |      \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "c179d9ed107f0dc2e82042abb43e68844592294b96a5dafaf04edf085ff46d21",
+      "occurrence": 2,
+      "sql_line": 272,
+      "kind": "text_plan",
+      "before_sha256": "70e21030fa543daedb5e1501b25b8b5252280cd52c115507ace5853b2193b834",
+      "after": "                    QUERY PLAN                    \n--------------------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on extremely_skewed s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+      "occurrence": 2,
+      "sql_line": 275,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "1363e1cbd8ea6d4af7a8a7baee46eea9a15609ab5b51ec48ae999b6c4cca73de",
+      "after": " original | final \n----------+-------\n          |      \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "c179d9ed107f0dc2e82042abb43e68844592294b96a5dafaf04edf085ff46d21",
+      "occurrence": 3,
+      "sql_line": 287,
+      "kind": "text_plan",
+      "before_sha256": "1bf1b73e0bae76d34638b1cbd021729626391bd32a85ea4d5e116e7e766956f1",
+      "after": "                    QUERY PLAN                    \n--------------------------------------------------\n Aggregate\n   ->  Hash Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on extremely_skewed s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4",
+      "occurrence": 3,
+      "sql_line": 290,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "868a5f7927c0e080eb229081e81fee92a09dad5f69bf352060a582c04e53740d",
+      "after": " original | final \n----------+-------\n          |      \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "e4d165179d2406fdf3d38d61f290364461be6264585567757f8e176ecd0b58bc",
+      "occurrence": 1,
+      "sql_line": 304,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "71d4ea16abeedcde5a0193ee3f75d13bb015488587b44587b51280892daf3a19",
+      "after": " original | final \n----------+-------\n          |      \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "38bd9b7e1b86f4ef1a3b1c00eccf258a3e5dd9e0c8483a92a0ce978655899ed0",
+      "occurrence": 1,
+      "sql_line": 330,
+      "kind": "text_plan",
+      "before_sha256": "416e2ce920107d523bf1653fe5436d6f1947aaa3b4dec3d7a07aa8033df69e2f",
+      "after": "                                     QUERY PLAN                                     \n------------------------------------------------------------------------------------\n Aggregate\n   ->  Nested Loop Left Join\n         Join Filter: ((join_foo.id < (b1.id + 1)) AND (join_foo.id > (b1.id - 1)))\n         ->  Seq Scan on join_foo\n         ->  Hash Join\n               Hash Cond: (b1.id = b2.id)\n               ->  Seq Scan on join_bar b1\n               ->  Hash\n                     ->  Seq Scan on join_bar b2\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+      "occurrence": 1,
+      "sql_line": 337,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "abd21bbc66a1f5ed8b8caa148f81f501de8e1159187550bfd0774999b0517555",
+      "after": " multibatch \n------------\n \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "38bd9b7e1b86f4ef1a3b1c00eccf258a3e5dd9e0c8483a92a0ce978655899ed0",
+      "occurrence": 2,
+      "sql_line": 358,
+      "kind": "text_plan",
+      "before_sha256": "416e2ce920107d523bf1653fe5436d6f1947aaa3b4dec3d7a07aa8033df69e2f",
+      "after": "                                     QUERY PLAN                                     \n------------------------------------------------------------------------------------\n Aggregate\n   ->  Nested Loop Left Join\n         Join Filter: ((join_foo.id < (b1.id + 1)) AND (join_foo.id > (b1.id - 1)))\n         ->  Seq Scan on join_foo\n         ->  Hash Join\n               Hash Cond: (b1.id = b2.id)\n               ->  Seq Scan on join_bar b1\n               ->  Hash\n                     ->  Seq Scan on join_bar b2\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+      "occurrence": 2,
+      "sql_line": 365,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "2bf32f3c6a38af04660b00ffaa5b18f8b9c30bcc6c418a8dd22bc9d002cdb366",
+      "after": " multibatch \n------------\n \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "38bd9b7e1b86f4ef1a3b1c00eccf258a3e5dd9e0c8483a92a0ce978655899ed0",
+      "occurrence": 3,
+      "sql_line": 386,
+      "kind": "text_plan",
+      "before_sha256": "de5356f93db696dd0b3b06541776de9442e5d32a20ba9cd6ca1fd287608670dc",
+      "after": "                                     QUERY PLAN                                     \n------------------------------------------------------------------------------------\n Aggregate\n   ->  Nested Loop Left Join\n         Join Filter: ((join_foo.id < (b1.id + 1)) AND (join_foo.id > (b1.id - 1)))\n         ->  Seq Scan on join_foo\n         ->  Hash Join\n               Hash Cond: (b1.id = b2.id)\n               ->  Seq Scan on join_bar b1\n               ->  Hash\n                     ->  Seq Scan on join_bar b2\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+      "occurrence": 3,
+      "sql_line": 393,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "abd21bbc66a1f5ed8b8caa148f81f501de8e1159187550bfd0774999b0517555",
+      "after": " multibatch \n------------\n \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "38bd9b7e1b86f4ef1a3b1c00eccf258a3e5dd9e0c8483a92a0ce978655899ed0",
+      "occurrence": 4,
+      "sql_line": 414,
+      "kind": "text_plan",
+      "before_sha256": "de5356f93db696dd0b3b06541776de9442e5d32a20ba9cd6ca1fd287608670dc",
+      "after": "                                     QUERY PLAN                                     \n------------------------------------------------------------------------------------\n Aggregate\n   ->  Nested Loop Left Join\n         Join Filter: ((join_foo.id < (b1.id + 1)) AND (join_foo.id > (b1.id - 1)))\n         ->  Seq Scan on join_foo\n         ->  Hash Join\n               Hash Cond: (b1.id = b2.id)\n               ->  Seq Scan on join_bar b1\n               ->  Hash\n                     ->  Seq Scan on join_bar b2\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0",
+      "occurrence": 4,
+      "sql_line": 421,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "2bf32f3c6a38af04660b00ffaa5b18f8b9c30bcc6c418a8dd22bc9d002cdb366",
+      "after": " multibatch \n------------\n \n(1 row)\n"
+    },
+    {
+      "sql_sha256": "afe80c8d64bc7d4a80158ed61454d29c21a1ae002937f9bbb0ba9b38fa6594cf",
+      "occurrence": 3,
+      "sql_line": 452,
+      "kind": "text_plan",
+      "before_sha256": "1541230d4f50bf2571e13dc27b5bda8c948c4bca3cdbb4f94588319527b77ed7",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Aggregate\n   ->  Hash Full Join\n         Hash Cond: (r.id = s.id)\n         ->  Seq Scan on simple r\n         ->  Hash\n               ->  Seq Scan on simple s\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "ffd5ca9534e708a8293d6e740338886a06ecc8c205cf9906bb2611f664a85968",
+      "occurrence": 3,
+      "sql_line": 479,
+      "kind": "text_plan",
+      "before_sha256": "6115b8bfe0e69417324a2356fe141cbc8024a936a94c8725f82516eb6cdb6765",
+      "after": "               QUERY PLAN               \n----------------------------------------\n Aggregate\n   ->  Hash Full Join\n         Hash Cond: ((0 - s.id) = r.id)\n         ->  Seq Scan on simple s\n         ->  Hash\n               ->  Seq Scan on simple r\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "923d05a5cc4ed7d4c7dd780bd94f899f6845084a9a9a4db50bdbfb6f04f18007",
+      "occurrence": 1,
+      "sql_line": 496,
+      "kind": "text_plan",
+      "before_sha256": "96c93a05c0e0ec5b8785f76d39b70e14b14d2195ea5025f501947297f64d1619",
+      "after": "                QUERY PLAN                 \n-------------------------------------------\n Aggregate\n   ->  Merge Left Join\n         Merge Cond: (wide.id = wide_1.id)\n         ->  Sort\n               Sort Key: wide.id\n               ->  Seq Scan on wide\n         ->  Sort\n               Sort Key: wide_1.id\n               ->  Seq Scan on wide wide_1\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "6fe33845b71e01a0a45def25382350c536a2e34ddd89632f48036ef82098916e",
+      "occurrence": 1,
+      "sql_line": 501,
+      "kind": "unavailable_hash_metrics",
+      "before_sha256": "abd21bbc66a1f5ed8b8caa148f81f501de8e1159187550bfd0774999b0517555",
+      "after": " multibatch \n------------\n \n(1 row)\n"
+    }
+  ]
+}

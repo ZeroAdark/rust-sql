@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "reason": "Reviewed engine plan structure and unavailable metrics; only pinned upstream EXPLAIN helpers may use their existing numeric placeholders. Data, errors and unfiltered root counts remain strict.",
+  "source_sha256": "3ed2a5133118ffc8c269555e6823619712a2a6d0a5153eb58002cd9643ec771e",
+  "expected_sha256": "d984c309ec7ab421ea755d90f7e1dc3c44b24623b9b49b98a7191a07a1a5b4e5",
+  "plans": [
+    {
+      "sql_sha256": "f3ad10e04ea24863006f10c5413a053250e14ab776d06b2101ffabe440fb4cdb",
+      "occurrence": 1,
+      "sql_line": 417,
+      "kind": "text_plan",
+      "before_sha256": "9df26f0eac970990c238fb383ea479d701259119353964cecd9a234a1a01da9c",
+      "after": "                                QUERY PLAN                                 \n---------------------------------------------------------------------------\n Nested Loop\n   ->  Seq Scan on int4_tbl touter\n   ->  Memoize\n         Cache Key: ((ANY (touter.f1 = (hashed SubPlan 4).col1)))::integer\n         Cache Mode: binary\n         ->  Append\n               ->  Index Only Scan using asptab0_pkey on asptab0 asptab_1\n                     Index Cond: (id > (EXISTS(SubPlan 3))::integer)\n                     SubPlan 4\n                       ->  Seq Scan on int4_tbl tinner_2\n               ->  Index Only Scan using asptab1_pkey on asptab1 asptab_2\n                     Index Cond: (id > (EXISTS(SubPlan 3))::integer)\n               SubPlan 3\n                 ->  Seq Scan on int4_tbl tinner_1\n                       Filter: (f1 = touter.f1)\n   SubPlan 2\n     ->  Seq Scan on int4_tbl tinner\n(17 rows)\n"
+    },
+    {
+      "sql_sha256": "1e021a291c1b69f3e3544a2d5cb063ed538cad8e48a89c5dafb11f807040e5cd",
+      "occurrence": 1,
+      "sql_line": 629,
+      "kind": "masked_text_plan",
+      "before_sha256": "5f16a152c87060ec84f8181ecbdb5381e45059454eee08986fe2ac57ca13c678",
+      "after": "                    explain_parallel_append                    \n---------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Append (actual rows=N loops=N)\n         Subplans Removed: 6\n         ->  Seq Scan on ab_a2_b1 ab_1 (actual rows=N loops=N)\n               Filter: ((a >= $1) AND (a <= $2) AND (b < 4))\n         ->  Seq Scan on ab_a2_b2 ab_2 (actual rows=N loops=N)\n               Filter: ((a >= $1) AND (a <= $2) AND (b < 4))\n         ->  Seq Scan on ab_a2_b3 ab_3 (actual rows=N loops=N)\n               Filter: ((a >= $1) AND (a <= $2) AND (b < 4))\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "e68ecd3d8226546cadb2c20608960590eb0d895ea0d1af3b203f35bc24bc54ed",
+      "occurrence": 1,
+      "sql_line": 635,
+      "kind": "masked_text_plan",
+      "before_sha256": "f85125b4a951fc90d7b5b21a21695618593aee61756251ae8b9f45d9c7710968",
+      "after": "                      explain_parallel_append                      \n-------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Append (actual rows=N loops=N)\n         Subplans Removed: 6\n         ->  Seq Scan on ab_a1_b1 ab_1 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n         ->  Seq Scan on ab_a1_b2 ab_2 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n         ->  Seq Scan on ab_a1_b3 ab_3 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "f410f00e8f34c52f303b40473bb8d5b0c7956bc666ada4b51c7b827899810998",
+      "occurrence": 1,
+      "sql_line": 636,
+      "kind": "masked_text_plan",
+      "before_sha256": "4afbd24d221ab106d53e72583767725f547b98765c872cfffbfc527a6565952e",
+      "after": "                      explain_parallel_append                      \n-------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Append (actual rows=N loops=N)\n         Subplans Removed: 3\n         ->  Seq Scan on ab_a2_b1 ab_1 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n         ->  Seq Scan on ab_a2_b2 ab_2 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n         ->  Seq Scan on ab_a2_b3 ab_3 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n         ->  Seq Scan on ab_a3_b1 ab_4 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n         ->  Seq Scan on ab_a3_b2 ab_5 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n         ->  Seq Scan on ab_a3_b3 ab_6 (actual rows=N loops=N)\n               Filter: ((b < 4) AND (a = ANY (ARRAY[$1, $2, $3])))\n(15 rows)\n"
+    },
+    {
+      "sql_sha256": "bccbc38ac271c4c2c0dea6ff3ef16a2e24b8da57cc8f449d396108424d367b2c",
+      "occurrence": 1,
+      "sql_line": 639,
+      "kind": "masked_text_plan",
+      "before_sha256": "4718f795acbc7de87229b4157f15f9854c203ffdc13f0177d980f548a7a3a3e2",
+      "after": "       explain_parallel_append        \n--------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Append (actual rows=N loops=N)\n         Subplans Removed: 9\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "fb1fd29a554b4ebc9568aac2e6f5e4120f6f6b5fff1f17115c810f9732a75708",
+      "occurrence": 1,
+      "sql_line": 642,
+      "kind": "masked_text_plan",
+      "before_sha256": "d9bf6711d1dca9d98dfda6ec32187e27092c69d23d38b1c5d1a2cfee84df0b78",
+      "after": "                                 explain_parallel_append                                  \n------------------------------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   InitPlan 1\n     ->  Result (actual rows=N loops=N)\n   InitPlan 2\n     ->  Result (actual rows=N loops=N)\n   ->  Append (actual rows=N loops=N)\n         ->  Seq Scan on ab_a1_b2 ab_1 (actual rows=N loops=N)\n               Filter: ((b = 2) AND ((a = (InitPlan 1).col1) OR (a = (InitPlan 2).col1)))\n         ->  Seq Scan on ab_a2_b2 ab_2 (never executed)\n               Filter: ((b = 2) AND ((a = (InitPlan 1).col1) OR (a = (InitPlan 2).col1)))\n         ->  Seq Scan on ab_a3_b2 ab_3 (actual rows=N loops=N)\n               Filter: ((b = 2) AND ((a = (InitPlan 1).col1) OR (a = (InitPlan 2).col1)))\n(12 rows)\n"
+    },
+    {
+      "sql_sha256": "f4cdfcebeaca02532b07bce76746833448ee16235663028dcee79ba800cde64d",
+      "occurrence": 1,
+      "sql_line": 668,
+      "kind": "masked_text_plan",
+      "before_sha256": "8bf72c09bfbe6ad0280a4ef5c36a9612bbda3d7824950a867ba00f3826ff64b5",
+      "after": "                                  explain_parallel_append                                   \n--------------------------------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Nested Loop (actual rows=N loops=N)\n         ->  Seq Scan on lprt_a a (actual rows=N loops=N)\n               Filter: (a = ANY ('{0,0,1}'::integer[]))\n         ->  Append (actual rows=N loops=N)\n               ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)\n                     Index Cond: (a = a.a)\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "565aa9d64a45a5823d3a3d61356a592e495090d7656c977235089075f821f5de",
+      "occurrence": 1,
+      "sql_line": 672,
+      "kind": "masked_text_plan",
+      "before_sha256": "6f0bd80aff6cb8c43193651f316a331d27bbd66b7d726094627bb1365f625fee",
+      "after": "                                  explain_parallel_append                                   \n--------------------------------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Nested Loop (actual rows=N loops=N)\n         ->  Seq Scan on lprt_a a (actual rows=N loops=N)\n               Filter: (a = ANY ('{0,0,1}'::integer[]))\n         ->  Append (actual rows=N loops=N)\n               ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)\n                     Index Cond: (a = (a.a + 0))\n               ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)\n                     Index Cond: (a = (a.a + 0))\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "6b48584792bdc0d4ce79d897f6c3c4a5bcbd7ca576277afe710c66014551d26a",
+      "occurrence": 1,
+      "sql_line": 676,
+      "kind": "masked_text_plan",
+      "before_sha256": "6271bfbfc34e2444943908aae328b151280b63cb66b87b3197241517be47d4f5",
+      "after": "                                  explain_parallel_append                                   \n--------------------------------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Nested Loop (actual rows=N loops=N)\n         ->  Seq Scan on lprt_a a (actual rows=N loops=N)\n               Filter: (a = ANY ('{1,0,3}'::integer[]))\n         ->  Append (actual rows=N loops=N)\n               ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "cfa2979e9c06d94f2a8a1c61833649c07777b608139079ee6763b6f4c7f9183a",
+      "occurrence": 1,
+      "sql_line": 677,
+      "kind": "masked_text_plan",
+      "before_sha256": "6490d8259949d6ee881666a81dc8026a093d06fc0e122740383ebfd3d278d3e0",
+      "after": "                                  explain_parallel_append                                   \n--------------------------------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Nested Loop (actual rows=N loops=N)\n         ->  Seq Scan on lprt_a a (actual rows=N loops=N)\n               Filter: (a = ANY ('{1,0,0}'::integer[]))\n               Rows Removed by Filter: N\n         ->  Append (actual rows=N loops=N)\n               ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (actual rows=N loops=N)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)\n                     Index Cond: (a = a.a)\n(24 rows)\n"
+    },
+    {
+      "sql_sha256": "cfa2979e9c06d94f2a8a1c61833649c07777b608139079ee6763b6f4c7f9183a",
+      "occurrence": 2,
+      "sql_line": 681,
+      "kind": "masked_text_plan",
+      "before_sha256": "afe34e7cd726e91b881c2e29cb291481203f0df95a75eda9c102cea1d9431905",
+      "after": "                               explain_parallel_append                               \n-------------------------------------------------------------------------------------\n Aggregate (actual rows=N loops=N)\n   ->  Nested Loop (actual rows=N loops=N)\n         ->  Seq Scan on lprt_a a (actual rows=N loops=N)\n               Filter: (a = ANY ('{1,0,0}'::integer[]))\n               Rows Removed by Filter: N\n         ->  Append (actual rows=N loops=N)\n               ->  Index Scan using ab_a1_b1_a_idx on ab_a1_b1 ab_1 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b2_a_idx on ab_a1_b2 ab_2 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a1_b3_a_idx on ab_a1_b3 ab_3 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b1_a_idx on ab_a2_b1 ab_4 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b2_a_idx on ab_a2_b2 ab_5 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a2_b3_a_idx on ab_a2_b3 ab_6 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b1_a_idx on ab_a3_b1 ab_7 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b2_a_idx on ab_a3_b2 ab_8 (never executed)\n                     Index Cond: (a = a.a)\n               ->  Index Scan using ab_a3_b3_a_idx on ab_a3_b3 ab_9 (never executed)\n                     Index Cond: (a = a.a)\n(24 rows)\n"
+    },
+    {
+      "sql_sha256": "48694062996586b994e6b9f56e89cf34074f9823768ee805a106502df8828c5c",
+      "occurrence": 1,
+      "sql_line": 692,
+      "kind": "text_plan",
+      "before_sha256": "3bc49583df36f85d84a6f43b61c2383d444c280a3ad86d458ca32cd8ea3a86ea",
+      "after": "                               QUERY PLAN                               \n------------------------------------------------------------------------\n Append (actual rows=0.00 loops=1)\n   InitPlan 1\n     ->  Aggregate (actual rows=1.00 loops=1)\n           ->  Seq Scan on lprt_a (actual rows=102.00 loops=1)\n   InitPlan 2\n     ->  Aggregate (actual rows=1.00 loops=1)\n           ->  Seq Scan on lprt_a lprt_a_1 (actual rows=102.00 loops=1)\n   ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a2_b1 ab_4 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a2_b1_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a2_b2 ab_5 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a2_b2_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a2_b3 ab_6 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a2_b3_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a3_b1 ab_7 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a3_b1_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a3_b2 ab_8 (actual rows=0.00 loops=1)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a3_b2_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n   ->  Bitmap Heap Scan on ab_a3_b3 ab_9 (never executed)\n         Recheck Cond: (a = (InitPlan 1).col1)\n         Filter: (b = (InitPlan 2).col1)\n         ->  Bitmap Index Scan on ab_a3_b3_a_idx (actual: not counted)\n               Index Cond: (a = (InitPlan 1).col1)\n Gravity: driver road, 13 pipelines, 12 sites, 2 sections, 0 claims\n   p4  empty (IndexSource@0)\n   p5  empty (IndexSource@0)\n   p6  empty (IndexSource@0)\n   p7  empty (IndexSource@0)\n   p8  empty (IndexSource@0)\n   p9  empty (IndexSource@0)\n   p10  empty (IndexSource@0)\n   p11  emit (IndexSource@0)\n   p12  empty (IndexSource@0)\n   Program: admitted, shape GRAPH\n(63 rows)\n"
+    },
+    {
+      "sql_sha256": "ca0671ba752f23cee7db319491bd03a6d4476fde332312dfb165ce3f67c15dd4",
+      "occurrence": 1,
+      "sql_line": 737,
+      "kind": "text_plan",
+      "before_sha256": "7f8bb2f173612628fca611a9edbeabc7f326924d68d095d972b02c888b9b9481",
+      "after": "                                     explain_analyze                                     \n-----------------------------------------------------------------------------------------\n Update on ab_a1 (actual rows=0.00 loops=1)\n   Update on ab_a1_b1 ab_a1_1\n   Update on ab_a1_b2 ab_a1_2\n   Update on ab_a1_b3 ab_a1_3\n   ->  Nested Loop (actual rows=1.00 loops=1)\n         ->  Append (actual rows=1.00 loops=1)\n               ->  Bitmap Heap Scan on ab_a1_b1 ab_a1_1 (actual rows=0.00 loops=1)\n                     Recheck Cond: (a = 1)\n                     ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual rows=0.00 loops=1)\n                           Index Cond: (a = 1)\n                           Index Searches: 1\n               ->  Bitmap Heap Scan on ab_a1_b2 ab_a1_2 (actual rows=1.00 loops=1)\n                     Recheck Cond: (a = 1)\n                     Heap Blocks: exact=1\n                     ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual rows=1.00 loops=1)\n                           Index Cond: (a = 1)\n                           Index Searches: 1\n               ->  Bitmap Heap Scan on ab_a1_b3 ab_a1_3 (actual rows=0.00 loops=1)\n                     Recheck Cond: (a = 1)\n                     Heap Blocks: exact=1\n                     ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual rows=1.00 loops=1)\n                           Index Cond: (a = 1)\n                           Index Searches: 1\n         ->  Materialize (actual rows=1.00 loops=1)\n               ->  Append (actual rows=1.00 loops=1)\n                     ->  Bitmap Heap Scan on ab_a1_b1 ab_1 (actual rows=0.00 loops=1)\n                           Recheck Cond: (a = 1)\n                           ->  Bitmap Index Scan on ab_a1_b1_a_idx (actual: not counted)\n                                 Index Cond: (a = 1)\n                     ->  Bitmap Heap Scan on ab_a1_b2 ab_2 (actual rows=1.00 loops=1)\n                           Recheck Cond: (a = 1)\n                           ->  Bitmap Index Scan on ab_a1_b2_a_idx (actual: not counted)\n                                 Index Cond: (a = 1)\n                     ->  Bitmap Heap Scan on ab_a1_b3 ab_3 (actual rows=0.00 loops=1)\n                           Recheck Cond: (a = 1)\n                           ->  Bitmap Index Scan on ab_a1_b3_a_idx (actual: not counted)\n                                 Index Cond: (a = 1)\n Gravity: driver road, 7 pipelines, 8 sites\n   p4  emit (Write@1)\n   p5  emit (Write@1)\n   p6  emit (Write@1)\n   Program: admitted, shape GRAPH\n(42 rows)\n"
+    },
+    {
+      "sql_sha256": "9f48b664a0b85a3cc25105e2dff56e2e7794457356fb555abf57263b4970a188",
+      "occurrence": 1,
+      "sql_line": 744,
+      "kind": "text_plan",
+      "before_sha256": "4b0e94ffcccc13635eeeed5423ea598375f31d7e85cbaa462f4c7fcb265e9aee",
+      "after": "                                 explain_analyze                                 \n---------------------------------------------------------------------------------\n Update on ab_a1 (actual rows=0.00 loops=1)\n   Update on ab_a1_b1 ab_a1_1\n   Update on ab_a1_b2 ab_a1_2\n   Update on ab_a1_b3 ab_a1_3\n   InitPlan 1\n     ->  Result (actual rows=1.00 loops=1)\n   ->  Nested Loop (actual rows=3.00 loops=1)\n         ->  Append (actual rows=3.00 loops=1)\n               ->  Seq Scan on ab_a1_b1 ab_a1_1 (actual rows=1.00 loops=1)\n               ->  Seq Scan on ab_a1_b2 ab_a1_2 (actual rows=1.00 loops=1)\n               ->  Seq Scan on ab_a1_b3 ab_a1_3 (actual rows=1.00 loops=1)\n         ->  Materialize (actual rows=1.00 loops=3)\n               ->  Append (actual rows=1.00 loops=1)\n                     ->  Seq Scan on ab_a2_b1 ab_a2_1 (actual rows=1.00 loops=1)\n                           Filter: (b = (InitPlan 1).col1)\n                     ->  Seq Scan on ab_a2_b2 ab_a2_2 (never executed)\n                           Filter: (b = (InitPlan 1).col1)\n                     ->  Seq Scan on ab_a2_b3 ab_a2_3 (never executed)\n                           Filter: (b = (InitPlan 1).col1)\n Gravity: driver road, 8 pipelines, 8 sites\n   p5  emit (Write@1)\n   p6  emit (Write@1)\n   p7  emit (Write@1)\n   Program: admitted, shape GRAPH\n(24 rows)\n"
+    },
+    {
+      "sql_sha256": "3c59e59bedb0f98e38d064fa006eab9ab86d6d045ba9501d57acc3bc1f68bbf7",
+      "occurrence": 1,
+      "sql_line": 1005,
+      "kind": "text_plan",
+      "before_sha256": "278414d399df7acbd76259a0063618958a6873eeb79be10a755ed5e52a80b803",
+      "after": "                QUERY PLAN                \n------------------------------------------\n Limit (actual rows=0.00 loops=1)\n   Output: ma_test.a, ma_test.b\n   ->  Merge Append (actual: not counted)\n         Sort Key: ma_test.b\n         Subplans Removed: 3\n(5 rows)\n"
+    },
+    {
+      "sql_sha256": "64955bc273bee33fcfbf1b710f691c6ab96e50c6d76a13c3937b4ef2a356a05a",
+      "occurrence": 1,
+      "sql_line": 1231,
+      "kind": "masked_text_plan",
+      "before_sha256": "7cc6fd74db102b4ccb42b26fba587e0e1330d799e06653252ca8459a0f25641f",
+      "after": "                   explain_parallel_append                    \n--------------------------------------------------------------\n Append (actual rows=N loops=N)\n   InitPlan 1\n     ->  Result (actual rows=N loops=N)\n   ->  Seq Scan on listp_12_1 listp_1 (actual rows=N loops=N)\n         Filter: (a = (InitPlan 1).col1)\n   ->  Seq Scan on listp_12_2 listp_2 (never executed)\n         Filter: (a = (InitPlan 1).col1)\n(7 rows)\n"
+    },
+    {
+      "sql_sha256": "69925dd4027859910e1e180436cc648f3270dd519544a41bc6afa862e690c0f9",
+      "occurrence": 1,
+      "sql_line": 1236,
+      "kind": "masked_text_plan",
+      "before_sha256": "ad13a584b24960ec853af0fcc4bde9c23f17c3387f2c2b0024581b1cbb0e6606",
+      "after": "                      explain_parallel_append                       \n--------------------------------------------------------------------\n Append (actual rows=N loops=N)\n   ->  Append (actual rows=N loops=N)\n         InitPlan 1\n           ->  Result (actual rows=N loops=N)\n         ->  Seq Scan on listp_12_1 listp_1 (actual rows=N loops=N)\n               Filter: (a = (InitPlan 1).col1)\n         ->  Seq Scan on listp_12_2 listp_2 (never executed)\n               Filter: (a = (InitPlan 1).col1)\n   ->  Append (actual rows=N loops=N)\n         InitPlan 2\n           ->  Result (actual rows=N loops=N)\n         ->  Seq Scan on listp_12_1 listp_4 (never executed)\n               Filter: (a = (InitPlan 2).col1)\n         ->  Seq Scan on listp_12_2 listp_5 (actual rows=N loops=N)\n               Filter: (a = (InitPlan 2).col1)\n(15 rows)\n"
+    }
+  ]
+}

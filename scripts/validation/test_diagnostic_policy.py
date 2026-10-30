@@ -12,6 +12,8 @@ from engine_regression_profile import plan_tables, validate_plan
 TEXT = {"kind": "text_plan", "header": "helper"}
 JSON = {"kind": "incremental_sort_json", "header": "jsonb_pretty"}
 MEMORY = {"kind": "memory_context_absence", "columns": ["type", "name", "?column?", "total_nblocks", "?column?", "free_chunks"]}
+MASKED_TEXT = {"kind": "masked_text_plan", "header": "helper", "root_format": "rows"}
+MASKED_JSON = {"kind": "masked_explain_json", "header": "jsonb_pretty"}
 
 
 def json_table(nodes):
@@ -23,6 +25,56 @@ def json_table(nodes):
 
 
 class DiagnosticPolicyTests(unittest.TestCase):
+    def test_unavailable_metrics_require_exactly_one_null_row(self):
+        rule = {"kind": "unavailable_hash_metrics", "columns": ["original", "final"]}
+        guard_change([" 1 | 2"], ["   |  "], rule)
+        for after in ([], ["   |  ", "   |  "], [" 0 |  "], [" f |  "], [" NULL | NULL"], ["  "], [" \t |  "]):
+            with self.assertRaises(ValueError):
+                guard_change([" 1 | 2"], after, rule)
+
+    def test_masked_root_requires_its_exact_upstream_format(self):
+        rows = [" Aggregate (actual rows=N loops=N)"]
+        guard_change(rows, [" Other (actual rows=N loops=N)"], MASKED_TEXT)
+        for invalid in ([" Other"], [" Other (actual rows=0 loops=N)"],
+                        [" Other (actual rows=N loops=1)"], [" Other (actual: not counted)"],
+                        [" (actual rows=N loops=N)"]):
+            with self.assertRaises(ValueError):
+                guard_change(rows, invalid, MASKED_TEXT)
+
+    def test_masked_timing_and_unknown_format(self):
+        rule = dict(MASKED_TEXT, root_format="timed")
+        rows = [" WindowAgg (actual time=N.N..N.N rows=N.N loops=N)"]
+        guard_change(rows, rows, rule)
+        for bad in (dict(rule, root_format="unknown"), MASKED_TEXT):
+            with self.assertRaises(ValueError):
+                guard_change(rows, rows, bad)
+
+    def test_masked_json_validates_every_node(self):
+        value = [{"Plan": {"Node Type": "Sort", "Actual Rows": 0, "Actual Loops": 0,
+                           "Plans": [{"Node Type": "Seq Scan", "Actual Rows": 0, "Actual Loops": 0}]}}]
+        self.assertEqual(validate_plan(json_table(value), MASKED_JSON), value)
+        for count in (1, True, "0", None, float("nan")):
+            changed = copy.deepcopy(value)
+            changed[0]["Plan"]["Plans"][0]["Actual Rows"] = count
+            with self.assertRaises(ValueError):
+                validate_plan(json_table(changed), MASKED_JSON)
+
+    def test_masked_json_rejects_non_plans_and_bad_children(self):
+        for value in ([], [1], [{}], [{"Plan": {}}], [{"Plan": {"Node Type": ""}}],
+                      [{"Plan": {"Node Type": "Sort", "Actual Rows": 0, "Actual Loops": 0, "Plans": {}}}],
+                      [{"Plan": {"Node Type": "Sort", "Actual Rows": 0}}]):
+            with self.assertRaises(ValueError):
+                validate_plan(json_table(value), MASKED_JSON)
+
+    def test_masked_json_root_guard_rejects_real_or_changed_counts(self):
+        before = [{"Plan": {"Actual Rows": 0, "Actual Loops": 0}}]
+        guard_change(before, before, MASKED_JSON)
+        for field in ("Actual Rows", "Actual Loops"):
+            after = copy.deepcopy(before)
+            after[0]["Plan"][field] = 1
+            with self.assertRaises(ValueError):
+                guard_change(before, after, MASKED_JSON)
+
     def test_only_pinned_sources_receive_bindings(self):
         self.assertEqual(bindings("SELECT explain_helper();\n"), {})
 

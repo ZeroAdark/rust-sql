@@ -13,6 +13,7 @@ from engine_regression_profile import apply, digest, read
 from choice_witness import compare_choices
 from choice_witness import POLICY as CHOICE_POLICY
 from diagnostic_policy import POLICY as DIAGNOSTIC_POLICY
+from diagnostic_policy import STATISTIC_KINDS
 
 
 def audit(fixtures, reference, candidate, profiles, output):
@@ -52,7 +53,7 @@ def audit(fixtures, reference, candidate, profiles, output):
             if profile_path.exists():
                 profile = json.loads(read(profile_path))
                 expected = apply(source, native, profile)
-                statistics = sum(p.get("kind") == "memory_context_absence" for p in profile["plans"])
+                statistics = sum(p.get("kind") in STATISTIC_KINDS for p in profile["plans"])
                 result.update(reviewed_plan_tables=len(profile["plans"]) - statistics,
                               reviewed_statistic_tables=statistics,
                               profile_sha256=digest(read(profile_path)))

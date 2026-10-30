@@ -1,0 +1,848 @@
+{
+  "passed": true,
+  "engines": {
+    "native": {
+      "cluster": "/home/rustsql/conformance/compat-viwrpotd",
+      "binary_sha256": "07b16e1aa4f0e2206c37b339b6e4cc813aa8ab9e3c5516334f753b3d90d0c536",
+      "version": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+      "checks": [
+        {
+          "name": "tenk_fixture_sort",
+          "sql": "SELECT * FROM tenk1 ORDER BY tenthous",
+          "types": [
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            19,
+            19,
+            19
+          ],
+          "rows": 10000,
+          "values_sha256": "f2e9d05fa5a1ee1c203d4c99ca0c43190539b0aa065e149586ae8b9ab90cb190",
+          "tenk_data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+          "root_actual_rows": 10000.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Gather Merge",
+            "Seq Scan",
+            "Sort"
+          ]
+        },
+        {
+          "name": "window_memory",
+          "sql": "SELECT sum(n) OVER() FROM generate_series(1,10) a(n)",
+          "types": [
+            20
+          ],
+          "rows": 10,
+          "values_sha256": "ed6b64e6463dba42bf98539c196cdf176c271c2645b9e698ba05a06845a3442e",
+          "root_actual_rows": 10.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Function Scan",
+            "WindowAgg"
+          ]
+        },
+        {
+          "name": "window_small_budget",
+          "sql": "SELECT sum(n) OVER() FROM generate_series(1,2500) a(n)",
+          "types": [
+            20
+          ],
+          "rows": 2500,
+          "values_sha256": "56322743cbcdec8b599d7a9b9d02e3a226c801543b8970e9693af08c077ac668",
+          "root_actual_rows": 2500.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Function Scan",
+            "WindowAgg"
+          ]
+        },
+        {
+          "name": "window_mixed_partitions",
+          "sql": "SELECT sum(n) OVER(PARTITION BY m) FROM (SELECT n<3 AS m,n FROM generate_series(1,2500) a(n)) s",
+          "types": [
+            20
+          ],
+          "rows": 2500,
+          "values_sha256": "bc7a7ec43f553f01997a8096c341d6b8a700e12dd9782c8d65e9c026fe93278b",
+          "root_actual_rows": 2500.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Function Scan",
+            "Sort",
+            "WindowAgg"
+          ]
+        },
+        {
+          "name": "prepared_in_1_1_1",
+          "sql": "EXECUTE ab_q5(1,1,1)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "prepared_in_2_3_3",
+          "sql": "EXECUTE ab_q5(2,3,3)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "682fb1914522a448dd5a9e007b1ef460eaee26385986f627dbf31813afd77550",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "prepared_in_33_44_55",
+          "sql": "EXECUTE ab_q5(33,44,55)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "0b99263f4bec935e7fb92342d0093bd0cd780cb3f12d3f6ce42c1d448e810e0e",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append"
+          ]
+        },
+        {
+          "name": "prepared_between",
+          "sql": "EXECUTE ab_q4(2,2)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc7ad73ff6815c9ba6315d20f5b01cc6c5de247c59c1bb01bea2355084a12a64",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "initplan_or",
+          "sql": "SELECT count(*) FROM ab WHERE (a=(SELECT 1) OR a=(SELECT 3)) AND b=2",
+          "types": [
+            20
+          ],
+          "rows": 1,
+          "values_sha256": "a9ae641b7f052c0994d31111f1bb92a40340e57b57c984bf99f03949206426a1",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Gather",
+            "Result",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_param",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(0,0,1)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Gather",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_expression",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a+0 WHERE x.a IN(0,0,1)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Gather",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_three",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(1,0,3)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc7ad73ff6815c9ba6315d20f5b01cc6c5de247c59c1bb01bea2355084a12a64",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Gather",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_one",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(1,0,0)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Gather",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_missing",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(1,0,0)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "0b99263f4bec935e7fb92342d0093bd0cd780cb3f12d3f6ce42c1d448e810e0e",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Gather",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "two_initplans",
+          "sql": "SELECT * FROM ab WHERE a=(SELECT max(a) FROM lprt_a) AND b=(SELECT max(a)-1 FROM lprt_a)",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 1,
+          "values_sha256": "11b8fdac1a63a8bac69ae8bb2e7d45da5233eee87403861f14c17e9e6d9c0f6c",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Gather",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "nested_append",
+          "sql": "SELECT * FROM listp WHERE a=(SELECT 1)",
+          "types": [
+            23
+          ],
+          "rows": 2,
+          "values_sha256": "a4e47e24e4d9ac3d17ffd75a80bf200f45cce816f64efa04e6134fafe0f7542e",
+          "root_actual_rows": 2.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Gather",
+            "Result",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "nested_union",
+          "sql": "SELECT * FROM listp WHERE a=(SELECT 1) UNION ALL SELECT * FROM listp WHERE a=(SELECT 2)",
+          "types": [
+            23
+          ],
+          "rows": 3,
+          "values_sha256": "6ae3764150fc9980b234b4af346e6ac69fb2a5189ef81d557d14dec46e0e795c",
+          "root_actual_rows": 3.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Gather",
+            "Result",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "merge_append_pruned",
+          "sql": "EXECUTE mt_q2(35)",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 0,
+          "values_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "root_actual_rows": 0.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Limit",
+            "Merge Append"
+          ]
+        },
+        {
+          "name": "merge_append_nonempty",
+          "sql": "EXECUTE mt_q2(15)",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 1,
+          "values_sha256": "0bcebdf1df23cbca7864cbaa97e8b453bc6adf29720d13618efbdfb57c45bedd",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Index Scan",
+            "Limit",
+            "Merge Append"
+          ]
+        },
+        {
+          "name": "correlated_exists_pruning",
+          "sql": "SELECT * FROM (SELECT EXISTS(SELECT 1 FROM int4_tbl tinner WHERE f1=touter.f1) AS b FROM int4_tbl touter) ss,asptab WHERE asptab.id>ss.b::int",
+          "types": [
+            16,
+            23
+          ],
+          "rows": 2,
+          "values_sha256": "e96949bd176350111bd69e2d5ff2c2b0456ddf422b8a67bd8c2e394a6c02c145",
+          "root_actual_rows": 2.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Gather",
+            "Index Scan",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "update_partition_subtree",
+          "sql": "UPDATE ab_a1 SET b=3 FROM ab WHERE ab.a=1 AND ab.a=ab_a1.a",
+          "types": [
+            25,
+            23,
+            23
+          ],
+          "rows": 1,
+          "values_sha256": "37f5a8f76688647a00d4d9d9783a1827b6899d10c1c1884faa51e73aa2c1f994",
+          "root_actual_rows": 0.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Index Scan",
+            "Materialize",
+            "ModifyTable",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "update_pruned_source",
+          "sql": "UPDATE ab_a1 SET b=3 FROM ab_a2 WHERE ab_a2.b=(SELECT 1)",
+          "types": [
+            25,
+            23,
+            23
+          ],
+          "rows": 4,
+          "values_sha256": "20634de880661925a7ea2d8f401d63bd35df003bb236e79fb8ee2fed0275e512",
+          "root_actual_rows": 0.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Materialize",
+            "ModifyTable",
+            "Nested Loop",
+            "Result",
+            "Seq Scan"
+          ]
+        }
+      ],
+      "corruption_pruning": {
+        "excluded_corrupted_partitions": 8,
+        "selected_partition_rows": 2,
+        "negative_controls": [
+          {
+            "a": 2,
+            "b": 2,
+            "sqlstate": "XX001"
+          },
+          {
+            "a": 1,
+            "b": 1,
+            "sqlstate": "XX001"
+          }
+        ],
+        "files_restored_exactly": true,
+        "restored_rows": 11,
+        "restored_values_sha256": "ad8819f5b384d2d8e8509fe58481b6befe907394901bc917af7e009545227b99"
+      }
+    },
+    "candidate": {
+      "cluster": "/home/rustsql/conformance/compat-q5k5oskl",
+      "binary_sha256": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+      "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build 0447a2b) on x86_64-unknown-linux-gnu, 64-bit",
+      "checks": [
+        {
+          "name": "tenk_fixture_sort",
+          "sql": "SELECT * FROM tenk1 ORDER BY tenthous",
+          "types": [
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            23,
+            19,
+            19,
+            19
+          ],
+          "rows": 10000,
+          "values_sha256": "f2e9d05fa5a1ee1c203d4c99ca0c43190539b0aa065e149586ae8b9ab90cb190",
+          "tenk_data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+          "root_actual_rows": 10000.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Seq Scan",
+            "Sort"
+          ]
+        },
+        {
+          "name": "window_memory",
+          "sql": "SELECT sum(n) OVER() FROM generate_series(1,10) a(n)",
+          "types": [
+            20
+          ],
+          "rows": 10,
+          "values_sha256": "ed6b64e6463dba42bf98539c196cdf176c271c2645b9e698ba05a06845a3442e",
+          "root_actual_rows": 10.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Function Scan",
+            "WindowAgg"
+          ]
+        },
+        {
+          "name": "window_small_budget",
+          "sql": "SELECT sum(n) OVER() FROM generate_series(1,2500) a(n)",
+          "types": [
+            20
+          ],
+          "rows": 2500,
+          "values_sha256": "56322743cbcdec8b599d7a9b9d02e3a226c801543b8970e9693af08c077ac668",
+          "root_actual_rows": 2500.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Function Scan",
+            "WindowAgg"
+          ]
+        },
+        {
+          "name": "window_mixed_partitions",
+          "sql": "SELECT sum(n) OVER(PARTITION BY m) FROM (SELECT n<3 AS m,n FROM generate_series(1,2500) a(n)) s",
+          "types": [
+            20
+          ],
+          "rows": 2500,
+          "values_sha256": "bc7a7ec43f553f01997a8096c341d6b8a700e12dd9782c8d65e9c026fe93278b",
+          "root_actual_rows": 2500.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Function Scan",
+            "Sort",
+            "WindowAgg"
+          ]
+        },
+        {
+          "name": "prepared_in_1_1_1",
+          "sql": "EXECUTE ab_q5(1,1,1)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "prepared_in_2_3_3",
+          "sql": "EXECUTE ab_q5(2,3,3)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "682fb1914522a448dd5a9e007b1ef460eaee26385986f627dbf31813afd77550",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "prepared_in_33_44_55",
+          "sql": "EXECUTE ab_q5(33,44,55)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "0b99263f4bec935e7fb92342d0093bd0cd780cb3f12d3f6ce42c1d448e810e0e",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append"
+          ]
+        },
+        {
+          "name": "prepared_between",
+          "sql": "EXECUTE ab_q4(2,2)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc7ad73ff6815c9ba6315d20f5b01cc6c5de247c59c1bb01bea2355084a12a64",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "initplan_or",
+          "sql": "SELECT count(*) FROM ab WHERE (a=(SELECT 1) OR a=(SELECT 3)) AND b=2",
+          "types": [
+            20
+          ],
+          "rows": 1,
+          "values_sha256": "a9ae641b7f052c0994d31111f1bb92a40340e57b57c984bf99f03949206426a1",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Result",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_param",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(0,0,1)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_expression",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a+0 WHERE x.a IN(0,0,1)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_three",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(1,0,3)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc7ad73ff6815c9ba6315d20f5b01cc6c5de247c59c1bb01bea2355084a12a64",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_one",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(1,0,0)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "bc798dc6135ea1fd4f0844933d023a9250f93e9f1c79561a9e296a96e0069a2b",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "join_missing",
+          "sql": "SELECT avg(ab.a) FROM ab JOIN lprt_a x ON ab.a=x.a WHERE x.a IN(1,0,0)",
+          "types": [
+            1700
+          ],
+          "rows": 1,
+          "values_sha256": "0b99263f4bec935e7fb92342d0093bd0cd780cb3f12d3f6ce42c1d448e810e0e",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Materialize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "two_initplans",
+          "sql": "SELECT * FROM ab WHERE a=(SELECT max(a) FROM lprt_a) AND b=(SELECT max(a)-1 FROM lprt_a)",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 1,
+          "values_sha256": "11b8fdac1a63a8bac69ae8bb2e7d45da5233eee87403861f14c17e9e6d9c0f6c",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Append",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "nested_append",
+          "sql": "SELECT * FROM listp WHERE a=(SELECT 1)",
+          "types": [
+            23
+          ],
+          "rows": 2,
+          "values_sha256": "a4e47e24e4d9ac3d17ffd75a80bf200f45cce816f64efa04e6134fafe0f7542e",
+          "root_actual_rows": 2.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Result",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "nested_union",
+          "sql": "SELECT * FROM listp WHERE a=(SELECT 1) UNION ALL SELECT * FROM listp WHERE a=(SELECT 2)",
+          "types": [
+            23
+          ],
+          "rows": 3,
+          "values_sha256": "6ae3764150fc9980b234b4af346e6ac69fb2a5189ef81d557d14dec46e0e795c",
+          "root_actual_rows": 3.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Result",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "merge_append_pruned",
+          "sql": "EXECUTE mt_q2(35)",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 0,
+          "values_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "root_actual_rows": 0.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Limit",
+            "Merge Append"
+          ]
+        },
+        {
+          "name": "merge_append_nonempty",
+          "sql": "EXECUTE mt_q2(15)",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 1,
+          "values_sha256": "0bcebdf1df23cbca7864cbaa97e8b453bc6adf29720d13618efbdfb57c45bedd",
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Index Scan",
+            "Limit",
+            "Merge Append"
+          ]
+        },
+        {
+          "name": "correlated_exists_pruning",
+          "sql": "SELECT * FROM (SELECT EXISTS(SELECT 1 FROM int4_tbl tinner WHERE f1=touter.f1) AS b FROM int4_tbl touter) ss,asptab WHERE asptab.id>ss.b::int",
+          "types": [
+            16,
+            23
+          ],
+          "rows": 2,
+          "values_sha256": "e96949bd176350111bd69e2d5ff2c2b0456ddf422b8a67bd8c2e394a6c02c145",
+          "root_actual_rows": 2.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Index Scan",
+            "Memoize",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "update_partition_subtree",
+          "sql": "UPDATE ab_a1 SET b=3 FROM ab WHERE ab.a=1 AND ab.a=ab_a1.a",
+          "types": [
+            25,
+            23,
+            23
+          ],
+          "rows": 1,
+          "values_sha256": "37f5a8f76688647a00d4d9d9783a1827b6899d10c1c1884faa51e73aa2c1f994",
+          "root_actual_rows": 0.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Index Scan",
+            "Materialize",
+            "ModifyTable",
+            "Nested Loop",
+            "Seq Scan"
+          ]
+        },
+        {
+          "name": "update_pruned_source",
+          "sql": "UPDATE ab_a1 SET b=3 FROM ab_a2 WHERE ab_a2.b=(SELECT 1)",
+          "types": [
+            25,
+            23,
+            23
+          ],
+          "rows": 4,
+          "values_sha256": "20634de880661925a7ea2d8f401d63bd35df003bb236e79fb8ee2fed0275e512",
+          "root_actual_rows": 0.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Append",
+            "Materialize",
+            "ModifyTable",
+            "Nested Loop",
+            "Result",
+            "Seq Scan"
+          ]
+        }
+      ],
+      "corruption_pruning": {
+        "excluded_corrupted_partitions": 8,
+        "selected_partition_rows": 2,
+        "negative_controls": [
+          {
+            "a": 2,
+            "b": 2,
+            "sqlstate": "XX001"
+          },
+          {
+            "a": 1,
+            "b": 1,
+            "sqlstate": "XX001"
+          }
+        ],
+        "files_restored_exactly": true,
+        "restored_rows": 11,
+        "restored_values_sha256": "ad8819f5b384d2d8e8509fe58481b6befe907394901bc917af7e009545227b99"
+      }
+    }
+  },
+  "full_report_archive_member": "probes/filtered/report.json"
+}

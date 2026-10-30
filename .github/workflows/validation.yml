@@ -83,6 +83,12 @@ jobs:
           python3 scripts/validation/grouping_contract.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/grouping-contract.json
+          python3 scripts/validation/filtered_diagnostics_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/filtered-diagnostics.json
+          python3 scripts/validation/hash_diagnostics_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/hash-diagnostics.json
           python3 scripts/validation/catalog_churn_probe.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/catalog-churn.json

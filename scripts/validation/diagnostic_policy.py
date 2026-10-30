@@ -11,6 +11,11 @@ from compare_regression import FOOTER, SEPARATOR, columns, statements, table
 
 POLICY = Path(__file__).resolve().parents[2] / "regress/engine-profile/policy/diagnostics.json"
 ACTUAL = re.compile(r"\(actual rows=([0-9]+(?:\.[0-9]+)?) loops=([0-9]+|N)\)")
+MASKED_ROOTS = {
+    "rows": "(actual rows=N loops=N)",
+    "timed": "(actual time=N.N..N.N rows=N.N loops=N)",
+}
+STATISTIC_KINDS = {"memory_context_absence", "unavailable_hash_metrics"}
 
 
 def json_object(pairs):
@@ -52,16 +57,16 @@ def display_table(lines, start, rule):
     if start + 2 >= len(lines) or not SEPARATOR.fullmatch(lines[start + 1]):
         return None
     kind = rule["kind"]
-    if kind == "memory_context_absence":
+    if kind in STATISTIC_KINDS:
         if columns(lines[start], lines[start + 1])[0] != rule["columns"]:
             return None
         return table(lines, start)
     if lines[start].strip() != rule["header"] or "+" in lines[start + 1]:
         return None
-    if kind == "text_plan":
+    if kind in {"text_plan", "masked_text_plan"}:
         parsed = table(lines, start)
         return parsed if parsed and parsed[1] and all(row.startswith(" ") for row in parsed[1]) else None
-    if kind != "incremental_sort_json":
+    if kind not in {"incremental_sort_json", "masked_explain_json"}:
         raise ValueError("unrecognized diagnostic kind")
     end = start + 2
     while end < len(lines) and not FOOTER.fullmatch(lines[end]):
@@ -79,6 +84,25 @@ def display_table(lines, start, rule):
                            parse_constant=nonfinite_json)
     except (ValueError, TypeError):
         return None
+    if kind == "masked_explain_json":
+        # The pinned upstream helper replaces every numeric word with zero.
+        # Validate its format, never interpret those zeros as real counters.
+        if not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
+            return None
+        pending = [value[0].get("Plan")]
+        while pending:
+            node = pending.pop()
+            if not isinstance(node, dict) or not isinstance(node.get("Node Type"), str) or not node["Node Type"].strip():
+                return None
+            for key in ("Actual Rows", "Actual Loops"):
+                count = node.get(key)
+                if type(count) not in (int, Decimal) or not Decimal(count).is_finite() or count != 0:
+                    return None
+            children = node.get("Plans", [])
+            if not isinstance(children, list):
+                return None
+            pending.extend(children)
+        return end, value
     if (not isinstance(value, list) or not value or
             any(not isinstance(node, dict) or node.get("Node Type") != "Incremental Sort" for node in value)):
         return None
@@ -106,9 +130,26 @@ def guard_change(before, after, rule):
     if kind == "memory_context_absence":
         if after:
             raise ValueError("the reviewed allocator observation requires an empty result")
+    elif kind == "unavailable_hash_metrics":
+        if len(before) != 1 or len(after) != 1:
+            raise ValueError("hash metric projection must return one row")
+        cells = after[0].split("|")
+        if len(cells) != len(rule["columns"]) or any(cell.strip(" ") for cell in cells):
+            raise ValueError("unavailable hash metrics must be SQL NULL")
     elif kind == "text_plan":
         if root_count(before) != root_count(after):
             raise ValueError("measured root rows/loops changed")
+    elif kind == "masked_text_plan":
+        signature = MASKED_ROOTS.get(rule.get("root_format"))
+        if signature is None or any(not rows or not rows[0].endswith(signature) or
+                                    rows[0].count("(actual") != 1 or not rows[0][:-len(signature)].strip()
+                                    for rows in (before, after)):
+            raise ValueError("unrecognized upstream-masked root instrumentation")
+    elif kind == "masked_explain_json":
+        # display_table already validated the numeric-zero helper contract.
+        counts = lambda doc: (doc[0]["Plan"]["Actual Rows"], doc[0]["Plan"]["Actual Loops"])
+        if counts(before) != (0, 0) or counts(after) != (0, 0):
+            raise ValueError("upstream-masked JSON counters changed")
     elif kind == "incremental_sort_json":
         counts = lambda nodes: [(node["Actual Rows"], node["Actual Loops"]) for node in nodes]
         if counts(before) != counts(after):
