@@ -1,0 +1,198 @@
+[
+  {
+    "case": "inet",
+    "equal": true,
+    "order_blocks": 2,
+    "refused": [],
+    "diff_lines": 0
+  },
+  {
+    "case": "geometry",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 22
+  },
+  {
+    "case": "create_index",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 12
+  },
+  {
+    "case": "updatable_views",
+    "equal": true,
+    "order_blocks": 1,
+    "refused": [],
+    "diff_lines": 0
+  },
+  {
+    "case": "select_distinct",
+    "equal": false,
+    "order_blocks": 1,
+    "refused": [],
+    "diff_lines": 90
+  },
+  {
+    "case": "subselect",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 17
+  },
+  {
+    "case": "union",
+    "equal": true,
+    "order_blocks": 1,
+    "refused": [],
+    "diff_lines": 0
+  },
+  {
+    "case": "join",
+    "equal": false,
+    "order_blocks": 1,
+    "refused": [],
+    "diff_lines": 57
+  },
+  {
+    "case": "aggregates",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 174
+  },
+  {
+    "case": "portals",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 34
+  },
+  {
+    "case": "groupingsets",
+    "equal": false,
+    "order_blocks": 3,
+    "refused": [],
+    "diff_lines": 302
+  },
+  {
+    "case": "join_hash",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 555
+  },
+  {
+    "case": "merge",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 255
+  },
+  {
+    "case": "sysviews",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 16
+  },
+  {
+    "case": "tsrf",
+    "equal": false,
+    "order_blocks": 5,
+    "refused": [],
+    "diff_lines": 13
+  },
+  {
+    "case": "collate.icu.utf8",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 29
+  },
+  {
+    "case": "incremental_sort",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 495
+  },
+  {
+    "case": "generated_virtual",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 54
+  },
+  {
+    "case": "select_parallel",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 1254
+  },
+  {
+    "case": "write_parallel",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 92
+  },
+  {
+    "case": "window",
+    "equal": false,
+    "order_blocks": 39,
+    "refused": [],
+    "diff_lines": 431
+  },
+  {
+    "case": "sqljson",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 21
+  },
+  {
+    "case": "plpgsql",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 23
+  },
+  {
+    "case": "partition_join",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 149
+  },
+  {
+    "case": "partition_prune",
+    "equal": false,
+    "order_blocks": 1,
+    "refused": [],
+    "diff_lines": 754
+  },
+  {
+    "case": "partition_aggregate",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 860
+  },
+  {
+    "case": "explain",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 385
+  },
+  {
+    "case": "memoize",
+    "equal": false,
+    "order_blocks": 0,
+    "refused": [],
+    "diff_lines": 132
+  }
+]

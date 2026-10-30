@@ -1,0 +1,34 @@
+{
+  "source_base_commit": "0447a2bfac97fff0f0f769285d188f26159231ec",
+  "runtime_sources_lf_sha256": {
+    "crates/backend/utils/cache/inval/src/eoxact.rs": "fa2c3df923a28f6c3fb6da13f9cea4817370f43261a6a5afc37e9e8f1cadf695",
+    "crates/backend/utils/cache/inval/src/invalidate.rs": "3207ef523c0c3c12e1705b8a81af8ec0bc302c6dc29b05347c747de2c1356529",
+    "crates/backend/utils/cache/inval/src/tests.rs": "85261315672ddd9f103fbac17fa0d9c7a4fc0bdc10bbd67145c3a458364613fb",
+    "crates/gravity/exec/src/admit/entry/instrument.rs": "8ccfdc0d6dcfd9be8afebc7bdb976b3eddfe18729ec28eb3fe9de75fca8a8c9a",
+    "crates/gravity/hosts/src/ops/window/funcs.rs": "5b10eb32c7e0b84b8e18ecc9f617404ce628f1189ce8bacf99a83f6fe27e48ac",
+    "crates/gravity/lowerv4/src/dict/codefront.rs": "65d32e2776302f2bed27cddeb9dd36fbac49baa4b8407ecdad3c7897ed42bc27",
+    "crates/gravity/lowerv4/src/frame/instr.rs": "d685b1481b9bc9a006b07eaa0b30bdf1f157370b1deef22e8c9f89ffd91a1080",
+    "crates/gravity/lowerv4/src/ops/sort/inc_replay.rs": null,
+    "crates/gravity/lowerv4/src/ops/sort/mod.rs": "2c108b24ca9d826719266c15ffc30c3f00f341824eeec9c35aa0aebbe1341d76",
+    "crates/gravity/lowerv4/src/ops/sort/raw.rs": "ea26fae776d78f9697c37bccb13c736517ffeb1304edeee8e61aae17b8cc2f04",
+    "crates/gravity/lowerv4/src/ops/sort/topk_rows.rs": "713f2e659d26ebc41322e1e0410f97ebfe0ad801da4d96365f8da5606f032ad1",
+    "crates/gravity/lowerv4/src/table/radix.rs": "4b87868950088ccf6841cec776d8c255058b81c599cb7c52335d7c9f031827e7"
+  },
+  "binary_sha256": {
+    "final": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+    "catalog_fixed": "8b4a25deed50a790c3c380289d7772d0cd7a847d5598eba4b12fe827f4772e90",
+    "diagnostics_candidate": "872dc0d7388c37287706f1961c3bbf5a243ea73065752a2c696932a58f286841",
+    "previous_published": "9546e43d73645ae0505fef9b8dec7faf9cb9172226c5eb43d8034a9a10af9c2b",
+    "native_unmodified": "07b16e1aa4f0e2206c37b339b6e4cc813aa8ab9e3c5516334f753b3d90d0c536",
+    "native_window_patch": "7238ebbae4b544b7c063a84dc44a2db5669e8a51eb0a181637794f1d9253a623"
+  },
+  "raw_regression_failures": 28,
+  "ordering_equivalent_cases": [
+    "inet",
+    "updatable_views",
+    "union"
+  ],
+  "raw_archive_sha256": "25184e33343eec7dc0b3ec1a0e4dd2e15af24cbdbaccbe5087b19a5f756120e4",
+  "archive_note": "Native unmodified and final candidate raw results, logs, and complete strict ordering audit; all SQL errors preserved.",
+  "raw_archive_name": "raw-evidence.tar.xz"
+}

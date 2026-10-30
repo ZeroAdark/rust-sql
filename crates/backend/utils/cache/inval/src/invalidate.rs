@@ -333,9 +333,21 @@ pub fn CacheInvalidateRelcacheByTuple(classTuple: &HeapTupleData<'_>) -> PgResul
 }
 
 pub fn CacheInvalidateRelcacheByRelid(relid: Oid) -> PgResult<()> {
+    if cache_invalidate_relcache_by_relid_if_exists(relid)? {
+        Ok(())
+    } else {
+        Err(err_cache_lookup_failed(relid))
+    }
+}
+
+/// The operator-family scan does not lock each returned relation. A concurrent
+/// DROP can remove one before this lookup; DROP sends its own invalidation and
+/// there is no surviving support entry to refresh. Other lookup errors remain
+/// errors, and ordinary callers retain the strict public entry point above.
+pub(crate) fn cache_invalidate_relcache_by_relid_if_exists(relid: Oid) -> PgResult<bool> {
     let classtup = match syscache_seams::lookup_pg_class_by_relid::call(relid)? {
         Some(shape) => shape,
-        None => return Err(err_cache_lookup_failed(relid)),
+        None => return Ok(false),
     };
     let relation_id = classtup.oid;
     let database_id = if classtup.relisshared { InvalidOid } else { MyDatabaseId() };
@@ -344,7 +356,8 @@ pub fn CacheInvalidateRelcacheByRelid(relid: Oid) -> PgResult<()> {
         let mcx = state.mcx;
         let info = prepare_invalidation_state(state)?;
         registration::register_relcache_invalidation(mcx, state, info, database_id, relation_id)
-    })
+    })?;
+    Ok(true)
 }
 
 #[track_caller]

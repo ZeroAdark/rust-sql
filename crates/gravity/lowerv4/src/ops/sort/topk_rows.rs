@@ -43,7 +43,6 @@ use crate::ops::Table;
 use crate::rep::keylane::{self, Key};
 use crate::rep::KeyWord;
 
-use crate::ops::sort::inc_replay;
 use crate::ops::sort::strategies::bound_first::Bound;
 use crate::ops::sort::strategies::resident as res;
 use crate::ops::sort::lower::{sort_of, Arm, RunEmit, RunEnd};
@@ -140,8 +139,6 @@ struct Stop<'g> {
     w_seen: i32,
     /// The row before's prefix words, two per key (`[flags, word]`, or the image's two words).
     w_prev: PgVec<'g, i32>,
-    /// EXPLAIN ANALYZE of an exact stop: the replay of PostgreSQL's batches over the rows read (inc_replay.rs).
-    replay: Option<Replay>,
     /// Construct C2: the licence an inexact stop reads rows past PostgreSQL's stop under (`of`): the no-effects licence
     /// where no row before the sort raises (props `incremental_admit`, D449), else `Px::run_ahead`'s recheck licence;
     /// `None` for an exact stop, which reads PostgreSQL's rows. Held, not read.
@@ -149,24 +146,6 @@ struct Stop<'g> {
     ahead: Option<gravity_decompose::effects::Licence>,
 }
 
-/// An exact stop's replay (inc_replay.rs): its state's first frame word (`inc_replay::WORDS` in a row), the Incremental
-/// Sort node its cells count, a tuple's `t_len` (heap_form_minimal_tuple's: the 16-byte header, each column at its
-/// alignment, no NULLs).
-struct Replay {
-    w0: i32,
-    node: i32,
-    t_len: u64,
-}
-
-/// A run row's minimal tuple length where every column is fixed-width; `None` otherwise (a varlena's length is its row's).
-fn fixed_t_len(s: &Shape) -> Option<u64> {
-    let mut off = 0u64;
-    for c in s.cols.iter() {
-        let len = u64::try_from(c.tf.typlen).ok().filter(|&l| l > 0)?;
-        off = off.next_multiple_of(match c.tf.align { b'c' => 1, b's' => 2, b'i' => 4, _ => 8 }) + len;
-    }
-    Some(16 + off)
-}
 
 /// Whether prefix key `key` (over its column's facts `col`) is tested by its equality image (`rep::hash_image`: a string's
 /// or a bytea's exact Fp128 of its payload, a bpchar's trimmed) rather than by its order pair: a string key ordered by its
@@ -239,80 +218,15 @@ impl<'g> Stop<'g> {
         let w_prev = (0..pre).flat_map(|q| [(q, 0), (q, 1)]).map(|(q, h)| w(at | q << 16, h)).collect_in(mcx);
         // shapecheck fire signal (REGISTRY RUNS-08): which stop the bounded incremental sort took
         fires::fire(if exact { "topk.stop.exact" } else if ties { "topk.stop.ties" } else { "topk.stop.prefix" });
-        // EXPLAIN ANALYZE: an exact stop reads PostgreSQL's rows, so its batches replay (fixed-width rows only: the space
-        // is their tuples'); its words keyed past any prefix key's (q = 0xfe), in a row or not armed
-        let armed = crate::frame::instr::on() && exact && fixed_t_len(s).is_some();
-        let words: PgVec<'g, i32> = if armed { (0..inc_replay::WORDS).map(|i| w(at | 0xfe << 16, i as u8)).collect_in(mcx) } else { PgVec::new_in(mcx) };
-        let node = px.gx.pipelines()[k].node_ops.iter().rev().find(|o| o.first_op as usize <= at).map(|o| o.node_id);
-        let replay = match (node, fixed_t_len(s)) {
-            (Some(node), Some(t_len)) if armed && words.windows(2).all(|x| x[1] == x[0] + 8) => Some(Replay { w0: words[0], node, t_len }),
-            _ => None,
-        };
-        Some(Stop { pre, by_image, exact, w_seen, w_prev, replay, ahead })
+        Some(Stop { pre, by_image, exact, w_seen, w_prev, ahead })
     }
 
-    /// The replay's state pointer (its first frame word).
-    fn replay_state(b: &mut FunctionBuilder<'_>, env: &Env, r: &Replay, node: i32) -> Value {
-        let Some(words) = env.words else { bug(node, "a top's replay without the words site") };
-        b.ptr_add(words, env.zero, 1, r.w0)
-    }
-
-    /// The replay's check: every row's prefix pairs against the row before's (stored at every row), the row handed to
-    /// the replay (`CHANGED`, and `LAST` where the walk ends at it), then the stop as `check`'s.
-    fn check_replayed(&self, r: &Replay, b: &mut FunctionBuilder<'_>, env: &mut Env, node: i32, s: &Shape, row: &RowVals, w_n: i32) {
-        let (seen, n) = (env.load_word(b, self.w_seen), env.load_word(b, w_n));
-        let pairs = self.pairs(b, env, node, s, row);
-        let mut same = b.bconst(true);
-        for (i, v) in pairs.iter().flatten().enumerate() {
-            let prev = env.load_word(b, self.w_prev[i]);
-            let e = b.icmp(IntCond::Eq, *v, prev);
-            same = b.int_bin(IntBinOp::And, same, e);
-            env.store_word(b, self.w_prev[i], *v);
-        }
-        let first = b.icmp(IntCond::Eq, seen, env.zero);
-        let either = b.int_bin(IntBinOp::Or, same, first);
-        let t = b.bconst(true);
-        let changed = b.int_bin(IntBinOp::Xor, either, t);
-        let past = b.icmp(IntCond::Sge, seen, n);
-        let stop = b.int_bin(IntBinOp::And, past, changed);
-        let c = b.conv(ConvOp::Zext, Type::I64, changed);
-        let l = b.conv(ConvOp::Zext, Type::I64, stop);
-        let l = b.int_bin(IntBinOp::Add, l, l);
-        let flags = b.int_bin(IntBinOp::Or, c, l);
-        let st = Self::replay_state(b, env, r, node);
-        let h = res::host(b, "incsort_replay_row", &[Type::Ptr, Type::I64], Type::I64, gravity_abi::host_words!(super::raw::incsort_replay_row(st, flags)));
-        let _ = b.call_host(h, &[st, flags], Some(Type::I64));
-        let (l_stop, l_count) = (b.create_block(&[]), b.create_block(&[]));
-        b.cond_br(stop, (l_stop, &[]), (l_count, &[]));
-        b.switch_to(l_stop);
-        env.full(b, &row.carry, row.next);
-        b.switch_to(l_count);
-        let seen1 = b.int_bin(IntBinOp::Add, seen, env.one);
-        env.store_word(b, self.w_seen, seen1);
-    }
-
-    /// The replay's end: the input's end met (or the walk stopped), its counts added into the node's cells and cleared.
-    fn replay_end(&self, b: &mut FunctionBuilder<'_>, env: &mut Env, node: i32) {
-        let Some(r) = &self.replay else { return };
-        let st = Self::replay_state(b, env, r, node);
-        let h = res::host(b, "incsort_replay_end", &[Type::Ptr], Type::I64, gravity_abi::host_words!(super::raw::incsort_replay_end(st)));
-        let _ = b.call_host(h, &[st], Some(Type::I64));
-        for (i, ctr) in crate::frame::instr::INC_STATS.iter().enumerate() {
-            let off = r.w0 + 8 * (inc_replay::AGG_WORD + i) as i32;
-            let v = env.load_word(b, off);
-            crate::frame::instr::count(b, env.ctx, r.node, *ctr, v);
-            env.store_word(b, off, env.zero);
-        }
-    }
 
     /// Before the row is kept: past `n` rows seen and a new prefix, the walk ends; else the row is counted. Only the `n`th
     /// row writes its prefix words and only a row past it reads them: before `n` no row stops, and past it an unchanged
     /// prefix leaves the words equal to the row before's (a changed one stops). So a top that never stops pays one compare
     /// a row before `n` and no store past it, not a store per prefix word a row (RUNS-08's 32-key worst case).
     fn check(&self, b: &mut FunctionBuilder<'_>, env: &mut Env, node: i32, s: &Shape, row: &RowVals, w_n: i32) {
-        if let Some(r) = &self.replay {
-            return self.check_replayed(r, b, env, node, s, row, w_n);
-        }
         let (seen, n) = (env.load_word(b, self.w_seen), env.load_word(b, w_n));
         // `n` is at least 1 here (a top of 0 rows reads none), so the first row never stops
         let past = b.icmp(IntCond::Sge, seen, n);
@@ -666,10 +580,6 @@ impl<'g> EndMech for TopEnd<'g> {
             for &p in st.w_prev.iter() {
                 w.declare(OpenWord::open("top prefix pair", Base::Words, p, Type::I64, 0));
             }
-            for i in 0..st.replay.as_ref().map_or(0, |_| inc_replay::WORDS) {
-                let r = st.replay.as_ref().map_or(0, |r| r.w0);
-                w.declare(OpenWord::open("top incremental sort replay", Base::Words, r + 8 * i as i32, Type::I64, 0));
-            }
         }
     }
 
@@ -691,12 +601,6 @@ impl<'g> EndMech for TopEnd<'g> {
             }
         };
         env.store_word(b, self.w_n, n);
-        // the replay's bound (the top's n, `i64::MAX` for none) and tuple length
-        if let Some(r) = self.stop.as_ref().and_then(|st| st.replay.as_ref()) {
-            env.store_word(b, r.w0, n);
-            let t = b.iconst(Type::I64, r.t_len as i64);
-            env.store_word(b, r.w0 + 8, t);
-        }
         let four = b.iconst(Type::I64, SOFT_PER_N);
         let quarter = b.iconst(Type::I64, i64::MAX / SOFT_PER_N);
         let big = b.icmp(IntCond::Sgt, n, quarter);
@@ -777,9 +681,6 @@ impl<'g> EndMech for TopEnd<'g> {
     }
 
     fn finish(&self, b: &mut FunctionBuilder<'_>, env: &mut Env, x: &Exits) {
-        if let Some(st) = &self.stop {
-            st.replay_end(b, env, self.node);
-        }
         if self.arm {
             // the run word is written at every open (0): a section-end call's open sealed the run and stored none
             let run = self.run.run(b, env);

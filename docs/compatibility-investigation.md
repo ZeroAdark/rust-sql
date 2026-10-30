@@ -2,6 +2,38 @@
 
 Target: Linux x86-64, PostgreSQL 18.6, mixed OLTP/OLAP. CPU remains the primary optimization target. This work fixes a demonstrated instrumentation defect and patches vulnerable dependencies; it makes no new end-to-end CPU-saving claim.
 
+## Approved compatibility contract
+
+The fork must preserve SQL values, multiplicities, required ordering, transaction semantics, errors and wire protocol. Plans and statistics may describe this engine rather than PostgreSQL's implementation, provided they are truthful. Unavailable measurements are absent; a guessed PostgreSQL allocation or batch count is not a measurement. This contract was selected by the project owner on 2026-10-29.
+
+The native PostgreSQL 18.6 control passes all 231 unmodified regression cases with the same locale and reference build. `compare_regression.py` permits only duplicate-preserving row permutations under an unambiguous SQL ordering contract. It preserves values, errors, arrays, JSON and complete EXPLAIN text. Unresolved sort expressions, LIMIT, multiline rows and ambiguous statements remain exact. Its 27 tests include missing/changed values, tie-group boundaries, byte/line-ending preservation, quoted SQL, COPY data and seeded mutation/search checks. The existing order classifier was moved unchanged to a standalone module; missing upstream comparator helpers are not silently substituted.
+
+The comparator completely explains `inet`, `updatable_views` and `union` in the earlier run. Four focused native/candidate proofs additionally check geometric Infinity/NaN peers with every sort key projected, DISTINCT ON representative membership, and unordered JSON partition aggregates. These prove the named queries, not permission to normalize arbitrary geometric values or JSON arrays. Window coverage uses an independent frame oracle whose evaluation order is identified by row_number over the same window. ROWS/GROUPS frame selection is constant time; RANGE bounds use binary search; array checks cost their output size.
+
+## Truthful diagnostics and partition sizing
+
+Removed simulated PostgreSQL sort methods/space, hash buckets/batches/memory, and tuplestore memory statistics, along with the incremental-sort replay used to manufacture batch counters. Actual row/loop, buffer and available operator counters remain. Seven server checks verify real root counts, omission of unavailable fields, and unchanged volatile-expression behavior with ANALYZE. The explicit MERGE isolation overlay adds three Gravity execution reports; all non-diagnostic output is byte-identical to the vendor fixture. Vendor files remain untouched.
+
+Partition-bit lowering now caps large group estimates before multiplying by record width, preventing u64 overflow from selecting too few partitions. This is constant-time work per table opening, not per row. Tests cover host-derived L2 budgets, boundary estimates and maximal integers against a u128 oracle. Two old tests assumed the reference machine's cache behavior; their portable versions retain exact aggregate results and the advertised per-run record bound. All 637 lowering tests and the focused top-sort integration test pass.
+
+A four-run ABBA EXPLAIN microbenchmark (5,000 warm queries per run) observed 1.32/1.34 server CPU seconds before and 1.37/1.36 after the diagnostics/partition patch, about 2.6% higher on this narrow case. This is not a CPU improvement and is too small a sample for a performance qualification. It precedes the catalog-race fix. Keep the raw samples and binary identities; ordinary OLTP/OLAP savings remain unproven.
+
+## Catalog invalidation race
+
+The parallel regression sweep reproduced `cache lookup failed for relation` during an operator-family alteration. The focused probe creates/drops indexes concurrently with family changes: native PostgreSQL completed 1,600 DDL statements, while the pre-fix fork failed at its fifth family change. The family scan returns unlocked relation OIDs; a concurrent DROP can remove a relation before its subsequent pg_class lookup.
+
+The patch tolerates only a missing relation in that pre-commit invalidation walk. DROP already sends its own invalidation. Surviving relations retain correctly scoped messages; the ordinary strict lookup API and other catalog lookup errors are unchanged. The new regression test fails before the fix, and all 20 invalidation unit tests pass after it. The original 1,600-operation workload and an extended 16,000-operation workload both pass on native PostgreSQL and the patched fork. The raw `equivclass` fixture also passes after the fix. These are bounded concurrency tests, not a general absence-of-races proof.
+
+## Corrected window semantics: explicit PostgreSQL bug difference
+
+The initial window oracle passes 210/216 cases on both native PostgreSQL 18.6 and the diagnostics candidate. The six failures are two ROWS/EXCLUDE TIES frames over three shuffled seeds: first_value, last_value or nth_value returns an excluded/wrong row or NULL when the current row lies outside its frame. This matches the upstream [PostgreSQL bug report and pending fix](https://commitfest.postgresql.org/patch/7412/).
+
+The project owner explicitly chose correct SQL behavior over retaining this PostgreSQL bug. The fork now skips overlapping peers when the current row lies outside the frame, instead of treating the excluded current row as an eligible replacement. The two added conditions are constant-time and add no per-frame scan or allocation. This deliberately changes the affected SQL values compared with unpatched PostgreSQL 18.6.
+
+The independent oracle plus four minimal upstream examples passes all 220 cases on the corrected fork and on a separately built PostgreSQL control carrying the upstream v4 fix. The original native installation and vendor tree remain unchanged. Reports label patched controls and record binary and patch hashes; [patch provenance](../patches/postgresql/README.md) identifies the upstream author, pending status and source. No result masking is used to make the corrected oracle pass.
+
+The combined final candidate passes the 16,000-operation catalog stress test, 88 differential checks, seven EXPLAIN checks, four scoped choice proofs, 220 window checks, 510 reviewed engine isolation cases and ten crash/restore cycles. Raw PostgreSQL regression remains 203/231: the corrected `equivclass` case passes, `subselect` now exposes truthful Gravity diagnostics, and unspecified ordering still changes raw counts. See the [exact final evidence and remaining strict differences](../artifacts/validation/conformance-2026-10-29/README.md). This is not production qualification or a claim that every raw mismatch has been adjudicated.
+
 ## Fixed defect
 
 `EXPLAIN ANALYZE CREATE TABLE AS ... WITH NO DATA` previously reported unknown row counts for a plan that was known not to execute. It now supplies zero instrumentation and reports zero rows/loops (text output: never executed). Direct SQL and prepared EXECUTE both match native PostgreSQL. Both destination tables remain empty and a volatile sequence expression is not evaluated. The change only handles EXPLAIN's skipped-plan state; it does not add per-row execution probes or invented counters for other fused operators.

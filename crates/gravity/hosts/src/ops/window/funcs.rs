@@ -276,7 +276,10 @@ impl Rt {
                     let (gh, gt) = (self.f.grouphead, self.f.grouptail);
                     if pos >= gh && gt > fh {
                         let start = gh.max(fh);
-                        pos = if excl == FRAMEOPTION_EXCLUDE_GROUP { pos + gt - start } else if pos == start { cur } else { pos + gt - start - 1 };
+                        // EXCLUDE TIES retains the current row only when it is
+                        // inside the frame. Otherwise skip the overlapping peers
+                        // as EXCLUDE GROUP does (PostgreSQL bug #19732).
+                        pos = if excl == FRAMEOPTION_EXCLUDE_GROUP || cur < fh { pos + gt - start } else if pos == start { cur } else { pos + gt - start - 1 };
                     }
                 }
                 _ => return Err(bad("window.agg: an unrecognized frame exclusion")),
@@ -301,7 +304,7 @@ impl Rt {
                         let (gh, gt) = (self.f.grouphead, self.f.grouptail);
                         if pos < gt && gh < ft {
                             let end = gt.min(ft);
-                            pos = if excl == FRAMEOPTION_EXCLUDE_GROUP { pos - (end - gh) } else if pos == end - 1 { cur } else { pos - (end - 1 - gh) };
+                            pos = if excl == FRAMEOPTION_EXCLUDE_GROUP || cur >= ft { pos - (end - gh) } else if pos == end - 1 { cur } else { pos - (end - 1 - gh) };
                         }
                     }
                     _ => return Err(bad("window.agg: an unrecognized frame exclusion")),

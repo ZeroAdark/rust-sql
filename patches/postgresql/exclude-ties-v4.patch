@@ -1,0 +1,188 @@
+From 184991f1a2ed7ce43da02172f1ed0295fd33315d Mon Sep 17 00:00:00 2001
+From: Andrey Rachitskiy <pl0h0yp1@gmail.com>
+Date: Mon, 5 Oct 2026 16:07:43 +0500
+Subject: [PATCH v4] Fix first_value, nth_value, and last_value with EXCLUDE
+ TIES.
+
+WinGetFuncArgInFrame remaps the first overlapping peer to currentpos
+for EXCLUDE TIES, and the last overlapping peer when seeking from the
+frame tail.  That is only valid when the current row is in the frame.
+With a ROWS frame that starts on a peer, such as 1 FOLLOWING AND
+UNBOUNDED FOLLOWING, the remap lands on the current row, which is then
+rejected as out of frame.  first_value and nth_value return NULL even
+though later in-frame rows remain.  last_value has the same hole when
+the frame ends on a peer.
+
+Aggregates over the same window already saw those rows, because they
+walk the frame with row_is_in_frame.
+
+If the current row is before the frame head, skip the overlapping
+peer group as EXCLUDE GROUP does.  Do the same from the tail when the
+current row is at or after the frame tail.
+
+Author: Andrey Rachitskiy <pl0h0yp1@gmail.com>
+Reported-by: Shallow <theshallow27@gmail.com>
+Reviewed-by: shihao zhong <zhong950419@gmail.com>
+Discussion: https://www.postgresql.org/message-id/19732-d4eed889e3021ef8@postgresql.org
+---
+ src/backend/executor/nodeWindowAgg.c | 29 ++++++++++------
+ src/test/regress/expected/window.out | 51 ++++++++++++++++++++++++++++
+ src/test/regress/sql/window.sql      | 24 +++++++++++++
+ 3 files changed, 93 insertions(+), 11 deletions(-)
+
+diff --git a/src/backend/executor/nodeWindowAgg.c b/src/backend/executor/nodeWindowAgg.c
+index b86dcbba055..0b41eb4739e 100644
+--- a/src/backend/executor/nodeWindowAgg.c
++++ b/src/backend/executor/nodeWindowAgg.c
+@@ -4062,11 +4062,8 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
+ 			 * row's peer group from resulting in trying to fetch a row before
+ 			 * some previous mark position.
+ 			 *
+-			 * Note that in some corner cases such as current row being
+-			 * outside frame, these calculations are theoretically too simple,
+-			 * but it doesn't matter because we'll end up deciding the row is
+-			 * out of frame.  We do not attempt to avoid fetching rows past
+-			 * end of frame; that would happen in some cases anyway.
++			 * We do not attempt to avoid fetching rows past end of frame.
++			 * That would happen in some cases anyway.
+ 			 */
+ 			switch (winstate->frameOptions & FRAMEOPTION_EXCLUSION)
+ 			{
+@@ -4097,10 +4094,15 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
+ 						int64		overlapstart = Max(winstate->groupheadpos,
+ 													   winstate->frameheadpos);
+ 
+-						if (abs_pos == overlapstart)
+-							abs_pos = winstate->currentpos;
++						if (winstate->currentpos >= winstate->frameheadpos)
++						{
++							if (abs_pos == overlapstart)
++								abs_pos = winstate->currentpos;
++							else
++								abs_pos += winstate->grouptailpos - overlapstart - 1;
++						}
+ 						else
+-							abs_pos += winstate->grouptailpos - overlapstart - 1;
++							abs_pos += winstate->grouptailpos - overlapstart;
+ 					}
+ 					break;
+ 				default:
+@@ -4163,10 +4165,15 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
+ 						int64		overlapend = Min(winstate->grouptailpos,
+ 													 winstate->frametailpos);
+ 
+-						if (abs_pos == overlapend - 1)
+-							abs_pos = winstate->currentpos;
++						if (winstate->currentpos < winstate->frametailpos)
++						{
++							if (abs_pos == overlapend - 1)
++								abs_pos = winstate->currentpos;
++							else
++								abs_pos -= overlapend - 1 - winstate->groupheadpos;
++						}
+ 						else
+-							abs_pos -= overlapend - 1 - winstate->groupheadpos;
++							abs_pos -= overlapend - winstate->groupheadpos;
+ 					}
+ 					update_frameheadpos(winstate);
+ 					if (abs_pos < winstate->frameheadpos)
+diff --git a/src/test/regress/expected/window.out b/src/test/regress/expected/window.out
+index c0bde1c5eec..365dd914fb1 100644
+--- a/src/test/regress/expected/window.out
++++ b/src/test/regress/expected/window.out
+@@ -1037,6 +1037,57 @@ FROM tenk1 WHERE unique1 < 10;
+           7 |       7 |    3
+ (10 rows)
+ 
++-- first_value/last_value with EXCLUDE TIES when the frame edge is a peer
++SELECT k, first_value(k) OVER w
++FROM (VALUES (0), (0), (1)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
++	EXCLUDE TIES);
++ k | first_value 
++---+-------------
++ 0 |           1
++ 0 |           1
++ 1 |            
++(3 rows)
++
++SELECT k, last_value(k) OVER w
++FROM (VALUES (0), (1), (1)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
++	EXCLUDE TIES);
++ k | last_value 
++---+------------
++ 0 |           
++ 1 |          0
++ 1 |          0
++(3 rows)
++
++-- first_value with EXCLUDE TIES when peers lie before the frame head
++SELECT k, first_value(k) OVER w
++FROM (VALUES (0), (1), (1), (1), (2)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN 2 FOLLOWING AND UNBOUNDED FOLLOWING
++	EXCLUDE TIES);
++ k | first_value 
++---+-------------
++ 0 |           1
++ 1 |           2
++ 1 |           2
++ 1 |            
++ 2 |            
++(5 rows)
++
++-- nth_value(n > 1) with EXCLUDE TIES when the frame starts on a peer
++SELECT k, nth_value(k, 2) OVER w,
++	(array_agg(k) OVER w)[2] AS expected
++FROM (VALUES (0), (0), (1), (2)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
++	EXCLUDE TIES);
++ k | nth_value | expected 
++---+-----------+----------
++ 0 |         2 |        2
++ 0 |         2 |        2
++ 1 |           |         
++ 2 |           |         
++(4 rows)
++
+ SELECT sum(unique1) over (rows between 2 preceding and 1 preceding),
+ 	unique1, four
+ FROM tenk1 WHERE unique1 < 10;
+diff --git a/src/test/regress/sql/window.sql b/src/test/regress/sql/window.sql
+index 8e6f92d94c7..860d77e1713 100644
+--- a/src/test/regress/sql/window.sql
++++ b/src/test/regress/sql/window.sql
+@@ -235,6 +235,30 @@ SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 fo
+ 	unique1, four
+ FROM tenk1 WHERE unique1 < 10;
+ 
++-- first_value/last_value with EXCLUDE TIES when the frame edge is a peer
++SELECT k, first_value(k) OVER w
++FROM (VALUES (0), (0), (1)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
++	EXCLUDE TIES);
++
++SELECT k, last_value(k) OVER w
++FROM (VALUES (0), (1), (1)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
++	EXCLUDE TIES);
++
++-- first_value with EXCLUDE TIES when peers lie before the frame head
++SELECT k, first_value(k) OVER w
++FROM (VALUES (0), (1), (1), (1), (2)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN 2 FOLLOWING AND UNBOUNDED FOLLOWING
++	EXCLUDE TIES);
++
++-- nth_value(n > 1) with EXCLUDE TIES when the frame starts on a peer
++SELECT k, nth_value(k, 2) OVER w,
++	(array_agg(k) OVER w)[2] AS expected
++FROM (VALUES (0), (0), (1), (2)) t(k)
++WINDOW w AS (ORDER BY k ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
++	EXCLUDE TIES);
++
+ SELECT sum(unique1) over (rows between 2 preceding and 1 preceding),
+ 	unique1, four
+ FROM tenk1 WHERE unique1 < 10;
+-- 
+2.53.0
+

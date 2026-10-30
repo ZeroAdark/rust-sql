@@ -23,6 +23,7 @@ jobs:
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: cargo test --locked -j 2 -p gravity_program -p pgsync
       - run: python3 -m py_compile scripts/validation/*.py
+      - run: python3 -m unittest discover -s scripts/validation -p 'test_*.py'
       - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -51,6 +52,9 @@ jobs:
       - run: sudo localedef -i en_US -f UTF-8 en_US.UTF-8
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: cargo build --locked --release -j 2 -p main_main -p initdb
+      - run: cargo test --locked --release -j 2 -p gravity_lowerv4 --lib
+      - run: cargo test --locked --release -j 2 -p inval --lib
+      - run: cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::
       - run: cargo test --locked --release -j 2 -p compression -p basebackup_compress -p pgrc_codec -p xlogreader -p xloginsert -p parquet_read --lib
       - run: cargo test --locked --release -j 2 -p gravity_wasm --test gravity_wasm_suite
       - name: Build the pinned PostgreSQL reference separately
@@ -60,7 +64,7 @@ jobs:
           ./configure --prefix="$RUNNER_TEMP/postgres18" --without-readline
           make -j 2
           make install
-          make -C src/test/regress pg_regress
+          make -C src/test/regress all
           make -C src/test/isolation all
       - name: Differential SQL and whole-process crash/restore checks
         run: |
@@ -68,6 +72,14 @@ jobs:
           python3 scripts/validation/compatibility_probe.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" --output artifacts/compatibility.json
+          python3 scripts/validation/explain_contract.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/explain-contract.json
+          python3 scripts/validation/choice_contract.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/choice-contract.json
+          python3 scripts/validation/catalog_churn_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/catalog-churn.json
           python3 scripts/validation/recovery_probe.py --candidate target/release \
             --reference-clients "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/recovery.json --cycles 10
@@ -78,6 +90,11 @@ jobs:
             --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" \
             --reference-bin "$RUNNER_TEMP/postgres18/bin" --isolation-overlay regress/isolation-overlay
       # Deliberately remains red while raw PostgreSQL output differs; never silently normalize it.
+      - name: Native PostgreSQL regression control
+        run: |
+          python3 scripts/validation/reference_regression.py --reference "$RUNNER_TEMP/postgres18/bin" \
+            --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/native-regression.json
       - name: Strict PostgreSQL regression expectations
         run: |
           ulimit -s 65520
@@ -85,6 +102,23 @@ jobs:
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/postgres-raw.json \
             --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
             --reference-bin "$RUNNER_TEMP/postgres18/bin"
+      - name: Build separately patched PostgreSQL window control
+        if: always()
+        run: |
+          cp -a crates/postgres-18.6-reference "$RUNNER_TEMP/postgres-window-reference"
+          cd "$RUNNER_TEMP/postgres-window-reference"
+          patch --batch --fuzz=0 -p1 < "$GITHUB_WORKSPACE/patches/postgresql/exclude-ties-v4.patch"
+          ./configure --prefix="$RUNNER_TEMP/postgres18-window-fixed" --without-readline
+          make -j 2
+          make install
+      - name: Independent window-frame oracle against declared upstream fix
+        if: always()
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/window_peer_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18-window-fixed/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --reference-patch patches/postgresql/exclude-ties-v4.patch \
+            --output artifacts/window-peer.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

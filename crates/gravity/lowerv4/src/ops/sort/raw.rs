@@ -264,24 +264,3 @@ mod tests {
         }
     }
 }
-
-gravity_abi::host! {
-    /// EXPLAIN ANALYZE: a row a bounded incremental sort's top read, into its replay of PostgreSQL's batches
-    /// (inc_replay.rs `Replay::row`; `flags`: `CHANGED`, `LAST`). 0.
-    /// # Safety
-    /// `st` is the top's replay words (`inc_replay::WORDS` of them, 8-aligned, written only here and at its open).
-    #[guard(0)]
-    pub(crate) unsafe fn incsort_replay_row(st: *mut u8, flags: u64) -> u64 {
-        (*(st as *mut crate::ops::sort::inc_replay::Replay)).row(flags);
-        0
-    }
-
-    /// EXPLAIN ANALYZE: the top's input ended or its walk stopped (inc_replay.rs `Replay::end`). 0.
-    /// # Safety
-    /// As `incsort_replay_row`.
-    #[guard(0)]
-    pub(crate) unsafe fn incsort_replay_end(st: *mut u8) -> u64 {
-        (*(st as *mut crate::ops::sort::inc_replay::Replay)).end();
-        0
-    }
-}
