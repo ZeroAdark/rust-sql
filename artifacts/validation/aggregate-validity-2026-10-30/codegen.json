@@ -1,0 +1,48 @@
+[
+  {
+    "query": "group",
+    "before_key": "32e7f9f5d94fa64dc159f2b8f857c334",
+    "after_key": "96b1d1674ae3c02b094d3e9f5bcf3b18",
+    "before": {
+      "code_bytes": 12452,
+      "validity_loads_at_offset_32": {
+        "p0": 15,
+        "p1": 1,
+        "p2": 1
+      }
+    },
+    "after": {
+      "code_bytes": 12452,
+      "validity_loads_at_offset_32": {
+        "p0": 6,
+        "p1": 1,
+        "p2": 1
+      }
+    }
+  },
+  {
+    "query": "join",
+    "before_key": "430e09fbdf91c6615d9bffa52cb2c121",
+    "after_key": "914057d8ff5d7e432dc784af8b47b658",
+    "before": {
+      "code_bytes": 45308,
+      "validity_loads_at_offset_32": {
+        "p0": 0,
+        "p1": 45,
+        "p4": 30,
+        "p2": 1,
+        "p3": 1
+      }
+    },
+    "after": {
+      "code_bytes": 45308,
+      "validity_loads_at_offset_32": {
+        "p0": 0,
+        "p1": 18,
+        "p4": 12,
+        "p2": 1,
+        "p3": 1
+      }
+    }
+  }
+]

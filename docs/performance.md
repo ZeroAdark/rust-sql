@@ -2,9 +2,66 @@
 
 CPU savings are the primary goal. Bounded memory increases are acceptable when the CPU benefit is measured; correctness and latency remain release gates.
 
-## Fixed-work resource matrix, 2026-10-30
+## Aggregate validity forwarding, 2026-10-30
 
-The current runtime (`faf62fc4a544b2d033d812b9728b54ecfcf390ad`, binary
+Forwarding recently loaded/stored aggregate validity bytes removes a measured
+store-to-load dependency. The lookup examines at most 16 IR instructions (O(1)),
+preserves every store and adds no per-row metadata. See the [implementation and
+safety rules](aggregate-validity.md) and [complete retained evidence](../artifacts/validation/aggregate-validity-2026-10-30/README.md).
+
+This comparison isolates that change against the preceding fork runtime, binary
+`a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b`.
+The candidate is binary
+`26ba69060488b50cc165b9a450c397eab524c1240870012d7c775e12f4540f77`,
+built from `c25198bb144f1983db491c854fb8dfb5fa4dfd20` plus the two runtime source
+files whose hashes are in the evidence manifest. It uses the same locked release
+profile, fixed-work harness, guest CPU affinities, durability settings and dataset
+as the earlier matrix. It is not a new direct comparison against upstream.
+
+All 40 trials passed, checking 1,824,000 measured statements and all committed
+updates again after restart. No workload errors, OOM, swap, memory-limit events
+or CPU throttling occurred. Every one of the 20 paired CPU changes is negative
+(2.48–6.20% lower). Medians across five trials per binary and cap:
+
+| Cap | Previous CPU us/bundle | Candidate CPU us/bundle | Change in median CPU | Throughput change | Largest query p99 increase |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 GiB | 16,912.76 | 15,883.77 | -6.08% | +5.73% | none |
+| 2 GiB | 16,312.60 | 15,591.00 | -4.42% | +4.06% | none |
+| 4 GiB | 16,297.53 | 15,574.19 | -4.44% | +2.96% | +0.31% |
+| 8 GiB | 16,321.20 | 15,556.86 | -4.68% | +3.45% | +1.22% |
+
+The table compares the two medians. Median *paired* CPU changes are -4.37%,
+-4.48%, -4.54% and -4.71%; these are different summaries, particularly at 1 GiB.
+All pairs, ranges and query p50/p95/p99 values are retained. The provisional 5%
+throughput/p99 regression limits pass at every cap. Five observations are not a
+confidence interval, and this generated workload is not all database traffic.
+
+Memory remains a tradeoff. Median sampled peaks, in MiB:
+
+| Cap | Previous cgroup | Candidate cgroup | Previous PSS | Candidate PSS |
+| --- | ---: | ---: | ---: | ---: |
+| 1 GiB | 349.58 | 349.32 | 365.77 | 365.67 |
+| 2 GiB | 587.68 | 601.42 | 612.26 | 628.21 |
+| 4 GiB | 631.72 | 677.85 | 651.42 | 704.44 |
+| 8 GiB | 701.48 | 691.40 | 713.18 | 715.78 |
+
+At 4 GiB, cgroup peak rises 7.30% and PSS rises 8.14%; these costs are retained
+despite the CPU benefit. No general memory saving is claimed. An earlier, separate
+ten-trial 4 GiB calibration also reduced CPU in all five pairs, with a 4.74% change
+in median CPU and a 6.30% PSS increase. It is excluded from the full matrix totals.
+Profiling runs are also excluded from performance results.
+
+The candidate passes 642 lowering tests, 124 validation tests, 88 focused aggregate
+comparisons, 87 broader differential checks, seven EXPLAIN checks, the 142-case
+window trace probe and 220 independent window checks. A fresh regression capture
+accepts 231/231 under the reviewed contract (raw 203/231) and all 510 isolation
+cases pass. This establishes a measured CPU improvement on this WSL2 workstation;
+representative Linux-server workloads, overload, larger spills and long soaks
+remain qualification gates.
+
+## Earlier fixed-work resource matrix, 2026-10-30
+
+The pre-forwarding runtime (`faf62fc4a544b2d033d812b9728b54ecfcf390ad`, binary
 `a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b`)
 was compared with upstream `38634b408dea373f3944006dfbf74d19cbfc409f`
 (`bd9c8954d1c58ac3c0dcea5035af7cf44fc7c0e4bf8acb243a034132781d35e3`).
@@ -35,11 +92,11 @@ Medians across five trials per binary and limit; negative CPU changes are better
 | 4 GiB | 16,265.60 | 16,270.87 | +0.03% | -0.49% | +0.75% |
 | 8 GiB | 16,180.33 | 16,334.82 | +0.95% | -1.10% | +2.49% |
 
-**No end-to-end CPU saving is demonstrated.** The stable prepared workload does
+**This earlier comparison did not demonstrate an end-to-end CPU saving.** The stable prepared workload does
 not exercise the LRU eviction improvement. At 8 GiB, all five paired CPU changes
 are increases (0.006% to 1.645%); retain that cost in further investigation. The
 provisional median throughput and query-specific p99 limits pass at all four
-caps, but the required CPU improvement and server qualification remain open.
+caps; CPU improvement was still open at this checkpoint. Server qualification remains open.
 Five observations are not a confidence interval. Full paired values and ranges
 are retained rather than hiding variation behind these medians.
 
