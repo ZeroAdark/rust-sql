@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: rustup toolchain install 1.96.0 --profile minimal
       - run: cargo test --locked -j 2 -p gravity_program -p pgsync -p lmgr_proc
-      - run: cargo test --locked --release -j 2 -p pagepool --features global --test frames
+      - run: cargo test --locked --release -j 2 -p pagepool --features global --test frames --test idle_handoff --test idle_fallback
       - run: python3 -m py_compile scripts/validation/*.py
       - run: python3 -m unittest discover -s scripts/validation -p 'test_*.py'
       - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
@@ -44,7 +44,8 @@ jobs:
           name: dependency-audit
           path: dependency-audit.json
   server:
-    if: github.event_name == 'workflow_dispatch' && inputs.full_server
+    # Run the full server once per branch push; PR events retain the faster checks.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.full_server)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -79,6 +80,8 @@ jobs:
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/admission.json
           python3 scripts/validation/connection_queue_probe.py --candidate target/release \
             --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/connection-queue.json
+          python3 scripts/validation/idle_allocator_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/idle-allocator.json
           python3 scripts/validation/choice_contract.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/choice-contract.json

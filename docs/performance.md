@@ -249,3 +249,28 @@ python3 scripts/validation/compare_resource.py --calibration \
 ```
 
 `--calibration` explicitly labels the 4 GiB scope. Without it, the comparison still requires the complete four-limit matrix. An allocator comparison requires one identical binary and two explicit distinct allocator choices; a binary comparison requires distinct binaries and identical explicit allocator choices, if any. No failed or refused query counts as useful throughput.
+
+## Idle allocator reuse (2026-10-30)
+
+Current runs can now be reused by other threads after connection setup and through the existing idle timer. Empty runs stay formatted until reclamation. Busy sessions keep local current runs between commands, and general allocation gains no handoff bookkeeping. Synchronous pressure release collects abandoned empty runs before estimating what it can release. See [implementation and bounds](idle-allocator.md).
+
+The final binary is `5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a`; the unchanged comparison baseline is `2f35e3a361d2b660a73c5aefb739af6178ee3f4dfbd5b9b63f48b165e5d5ec3c`. This measures the allocator change relative to the connection-queue baseline, not the earlier validity-forwarding baseline. The separate percentage changes must not be combined arithmetically.
+
+| Limit | CPU/bundle | Throughput | Largest p99 change | Peak cgroup memory | Peak PSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 GiB | -0.47% | -0.47% | -0.57% | -0.04% | +1.86% |
+| 2 GiB | +1.71% | -1.30% | +2.46% | +1.01% | +1.62% |
+| 4 GiB | +1.24% | -1.03% | +3.02% | -0.39% | -0.95% |
+| 8 GiB | -1.09% | +0.52% | +4.25% | +0.67% | +2.44% |
+
+Forty interleaved trials execute 1,824,000 measured statements plus warmups. Both binaries explicitly use Hearth, six ordinary-role clients, one million fact rows, 400 measured bundles and 50 warmup bundles per client, a six-transaction cap, four server CPUs and durability enabled. All results, committed updates and clean restarts pass; no OOM, swap, memory-limit or measured CPU-throttling event occurs. Every median throughput/p99 change meets the provisional 5% guardrail. The table uses ratios of independent medians; JSON retains every paired change. No general additional CPU speedup is claimed.
+
+Five separate 4 GiB connection pairs complete 16,000 accepted startups and 20 overflow rejections. Median peak cgroup memory changes by -21.59%; startup-phase CPU per accepted startup changes by -19.03%, and CPU through server shutdown by -12.95%. The latter paired range is -28.47% to +24.73%. These short, variable runs do not establish a reliable CPU saving. Four server CPUs are affinity-checked for every held task, with a five-CPU quota on both sides to avoid CFS period-boundary throttling. Server and parent CPU counters are complete and show no throttling, including server teardown. This quota differs from the mixed matrix and is recorded in metadata. Wave times include orchestration and diagnostic snapshots, not just authentication.
+
+Three 2 GiB pilots each complete two waves of 500 admitted plus 300 queued connections. Peaks are 1822.87, 1864.38, 1852.75 MiB, leaving at least 183.62 MiB (8.97%). These pilots do not qualify 500 concurrent active queries, long churn or a production service. Previous baseline 2 GiB OOM failures remain retained.
+
+The final binary passes 117 allocator tests (one helper intentionally ignored), 12 smoke checks, 510 isolation cases, 231/231 reviewed SQL cases, 87 differential checks, 52 admission checks, 12 connection-contract checks, 12 idle-session checks and 21 TLS/authentication checks. Ten whole-process crash cycles and logical dump/restore checks pass. Raw PostgreSQL expectations still report 28/231 mismatches; that profile remains separate. The independent window oracle passes 220 comparisons on each of the candidate and separately patched PostgreSQL. The PostgreSQL EXCLUDE TIES bug difference remains intentional.
+
+Immediate empty-run return rebuilt 600 runs in 200 idle cycles and failed a latency guardrail. Keeping empty runs exposed an inline reclamation gap, although the existing background sweep still reclaimed them. Handoff after every ReadyForQuery later failed the 4 GiB range p99 guardrail (+5.29%). Moving handoff to actual idle periods passed those guardrails; its remaining allocation bookkeeping was then removed. That candidate failed the 2 GiB range p99 guardrail (+13.04%) and new fallback lifecycle controls. The final candidate keeps system-backed runs local, returns empty system cache runs at thread exit, and preserves remote-free reclamation with the pool off. Separate diagnostics at 1 and 4 GiB recorded no pressure-release calls during the mixed workload.
+
+[Complete reports, controls, source hashes and portable replay](../artifacts/validation/allocator-idle-reuse-2026-10-30/README.md) retain all candidates. This remains WSL development evidence. Large spills, pressure recovery, prolonged churn and representative Linux-server qualification remain open.

@@ -554,6 +554,19 @@ pub fn return_warm() -> usize {
 /// order: free superpages, dead runs, warm lazy spans, the claimer's zero superpages, then free runs inside superpages
 /// still in use. The bytes released.
 pub fn return_warm_now(want: usize) -> usize {
+    if want == 0 {
+        return 0;
+    }
+    // Idle handoffs can leave empty small runs on adoption lists. Make them visible before reading releasable(),
+    // rather than waiting for the purger's periodic sweep. Also flush system fallbacks when only GLOBAL_ON is set.
+    // This cold scan is linear in the abandoned runs/frees; the release phase below stays a no-op with the pool off.
+    crate::flush_remote();
+    return_warm_swept(want)
+}
+
+// The background purger already sweeps before serving an ask. Keep that work out of a second traversal.
+// Existing R1 step/call timings cover this release phase; the synchronous preflight sweep precedes it.
+fn return_warm_swept(want: usize) -> usize {
     // `PGRUST_POOL_FAST_RELEASE`: what is releasable is read after the central lists went home (their free runs count)
     let fast = fast_on();
     let want = if fast { want } else { want.min(releasable()) };
@@ -1138,13 +1151,17 @@ pub fn lazy_pass_now() -> usize {
 }
 
 /// The purger's pass over the pressure asked of it (`set_pressure`, R1's `return_warm`): released now. The bytes released.
-fn serve_ask() -> usize {
+fn serve_ask(already_swept: bool) -> usize {
     let r1 = LANDING.load(Acquire);
     let bytes = ASK.swap(0, Acquire);
     let asked = if r1 != 0 { ASK_NS.swap(0, Relaxed) } else { 0 };
+    // An ask can arrive after run() checked its periodic sweep condition.
+    if !already_swept && (r1 != 0 || bytes > 0) {
+        crate::flush_remote();
+    }
     let mut got = 0;
     if r1 != 0 {
-        got = return_warm_now(((r1 & ASK_BYTES) as usize).max(bytes));
+        got = return_warm_swept(((r1 & ASK_BYTES) as usize).max(bytes));
     } else if bytes > 0 {
         let c = ASK_CLASS.load(Relaxed);
         got = purge_now(bytes, (c != NO_CLASS).then(|| Class::from_u8(c)));
@@ -1173,7 +1190,7 @@ fn serve_ask() -> usize {
 fn cut_in() {
     if r1_waiting() {
         CUT_INS.fetch_add(1, Relaxed);
-        serve_ask();
+        serve_ask(false);
     }
 }
 
@@ -1181,7 +1198,7 @@ fn cut_in() {
 /// stands in for the purger's wake). The bytes released.
 #[doc(hidden)]
 pub fn serve_ask_now() -> usize {
-    serve_ask()
+    serve_ask(false)
 }
 
 fn run() {
@@ -1204,11 +1221,12 @@ fn run() {
         }
         RETURNING.store(false, Release);
         let asked = ASK.load(Acquire) != 0 || LANDING.load(Acquire) != 0;
-        if asked || tick().wrapping_sub(swept_at) >= SWEEP_MS {
+        let swept = asked || tick().wrapping_sub(swept_at) >= SWEEP_MS;
+        if swept {
             crate::flush_remote();
             swept_at = tick();
         }
-        serve_ask();
+        serve_ask(swept);
         // C.23: given base spans back first (a dirty one blocks the next carve), out of the pass's remap budget
         let spent = crate::span::clean_base(if cfg.age_pass_max == 0 { usize::MAX } else { cfg.age_pass_max });
         cut_in();

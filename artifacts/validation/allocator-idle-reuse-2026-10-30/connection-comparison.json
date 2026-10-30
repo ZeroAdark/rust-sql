@@ -1,0 +1,282 @@
+{
+  "evidence_valid": true,
+  "production_qualified": false,
+  "scope": "4 GiB two-wave startup calibration, five interleaved pairs",
+  "accepted_startups": 16000,
+  "overflow_rejections": 20,
+  "cpu_us_per_accepted_startup": {
+    "baseline": {
+      "values": [
+        1909.624375,
+        2319.0,
+        1610.968125,
+        2471.073125,
+        2736.778125
+      ],
+      "median": 2319.0,
+      "min": 1610.968125,
+      "max": 2736.778125
+    },
+    "candidate": {
+      "values": [
+        1352.706875,
+        1626.6775,
+        1877.7925,
+        2367.01,
+        2282.35875
+      ],
+      "median": 1877.7925,
+      "min": 1352.706875,
+      "max": 2367.01
+    },
+    "median_change_pct": -19.025765416127637,
+    "paired_change_pct": {
+      "values": [
+        -29.163719697492862,
+        -29.85435532557137,
+        16.562982895766474,
+        -4.211252348106842,
+        -16.604173018227407
+      ],
+      "median": -16.604173018227407,
+      "min": -29.85435532557137,
+      "max": 16.562982895766474
+    }
+  },
+  "cpu_us_per_accepted_startup_including_shutdown": {
+    "baseline": {
+      "values": [
+        1959.09875,
+        2358.41375,
+        1645.86,
+        2511.395,
+        2815.7925
+      ],
+      "median": 2358.41375,
+      "min": 1645.86,
+      "max": 2815.7925
+    },
+    "candidate": {
+      "values": [
+        1401.395,
+        1712.553125,
+        2052.890625,
+        2386.68,
+        2297.605625
+      ],
+      "median": 2052.890625,
+      "min": 1401.395,
+      "max": 2386.68
+    },
+    "median_change_pct": -12.954602431401197,
+    "paired_change_pct": {
+      "values": [
+        -28.467362862642844,
+        -27.38538244190614,
+        24.730573985636696,
+        -4.965965130933214,
+        -18.40287858569124
+      ],
+      "median": -18.40287858569124,
+      "min": -28.467362862642844,
+      "max": 24.730573985636696
+    }
+  },
+  "first_wave_seconds": {
+    "baseline": {
+      "values": [
+        0.5711805060000188,
+        0.7177860580000015,
+        0.5307482309999614,
+        0.7503327499998704,
+        0.6927037299999483
+      ],
+      "median": 0.6927037299999483,
+      "min": 0.5307482309999614,
+      "max": 0.7503327499998704
+    },
+    "candidate": {
+      "values": [
+        0.4645781970000371,
+        0.47346044200003234,
+        0.47437830600006237,
+        0.5898551969999062,
+        0.6027600709999206
+      ],
+      "median": 0.47437830600006237,
+      "min": 0.4645781970000371,
+      "max": 0.6027600709999206
+    },
+    "median_change_pct": -31.51786464321511,
+    "paired_change_pct": {
+      "values": [
+        -18.663506173647004,
+        -34.038779839322075,
+        -10.620840863415538,
+        -21.387518137785133,
+        -12.98443405235229
+      ],
+      "median": -18.663506173647004,
+      "min": -34.038779839322075,
+      "max": -10.620840863415538
+    }
+  },
+  "both_waves_seconds": {
+    "baseline": {
+      "values": [
+        0.9575267940001595,
+        1.133771601999797,
+        0.8150733610000316,
+        1.2359864089999064,
+        1.3528340219997972
+      ],
+      "median": 1.133771601999797,
+      "min": 0.8150733610000316,
+      "max": 1.3528340219997972
+    },
+    "candidate": {
+      "values": [
+        0.7392156990001695,
+        0.8360916199999338,
+        0.9716893900001651,
+        1.136649411999997,
+        1.1141258819998257
+      ],
+      "median": 0.9716893900001651,
+      "min": 0.7392156990001695,
+      "max": 1.136649411999997
+    },
+    "median_change_pct": -14.295843335090074,
+    "paired_change_pct": {
+      "values": [
+        -22.799476355953928,
+        -26.255727474105186,
+        19.214961069023005,
+        -8.037062242479475,
+        -17.645042637758802
+      ],
+      "median": -17.645042637758802,
+      "min": -26.255727474105186,
+      "max": 19.214961069023005
+    }
+  },
+  "peak_cgroup_mib": {
+    "baseline": {
+      "values": [
+        2483.109375,
+        2449.546875,
+        2547.01953125,
+        2446.6953125,
+        2476.296875
+      ],
+      "median": 2476.296875,
+      "min": 2446.6953125,
+      "max": 2547.01953125
+    },
+    "candidate": {
+      "values": [
+        1978.56640625,
+        1866.8984375,
+        1957.578125,
+        1941.734375,
+        1904.734375
+      ],
+      "median": 1941.734375,
+      "min": 1866.8984375,
+      "max": 1978.56640625
+    },
+    "median_change_pct": -21.587173387681958,
+    "paired_change_pct": {
+      "values": [
+        -20.318998986905278,
+        -23.785968068073814,
+        -23.14239836082922,
+        -20.638488777911533,
+        -23.08133995444306
+      ],
+      "median": -23.08133995444306,
+      "min": -23.785968068073814,
+      "max": -20.318998986905278
+    }
+  },
+  "minor_and_major_faults": {
+    "baseline": {
+      "values": [
+        86734,
+        86932,
+        86662,
+        86783,
+        87171
+      ],
+      "median": 86783,
+      "min": 86662,
+      "max": 87171
+    },
+    "candidate": {
+      "values": [
+        84268,
+        84004,
+        84587,
+        85445,
+        85054
+      ],
+      "median": 84587,
+      "min": 84004,
+      "max": 85445
+    },
+    "median_change_pct": -2.5304495120011983,
+    "paired_change_pct": {
+      "values": [
+        -2.843175686581967,
+        -3.3681498182487446,
+        -2.394359696291337,
+        -1.5417766152357015,
+        -2.428559956866394
+      ],
+      "median": -2.428559956866394,
+      "min": -3.3681498182487446,
+      "max": -1.5417766152357015
+    }
+  },
+  "all_pairs_more_cpu": false,
+  "metadata": {
+    "repeats": 5,
+    "memory_mib": 4096,
+    "allocator": "hearth",
+    "server_cpus": [
+      0,
+      2,
+      4,
+      6
+    ],
+    "client_cpus": [
+      8,
+      10
+    ],
+    "waves": 2,
+    "accepted_per_wave": 800,
+    "binaries": {
+      "baseline": {
+        "path": "/home/rustsql/connection-queue-fixed/bin",
+        "sha256": "2f35e3a361d2b660a73c5aefb739af6178ee3f4dfbd5b9b63f48b165e5d5ec3c"
+      },
+      "candidate": {
+        "path": "/home/rustsql/idle-safe-final-candidate/bin",
+        "sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a"
+      }
+    },
+    "source_sha256": {
+      "/home/rustsql/run_idle_safe_final_connection_comparison.py": "6da49e83690eb4eb0a6dd65e01f18ec052d47900efb2e8780b7583bdf987cba0",
+      "/home/rustsql/idle_safe_final_queue_probe.py": "4663f74a9f3b6db1ed984f8a94d5e062781afc1e6157d77339fbd0d270999976",
+      "/home/rustsql/pgrust/scripts/validation/connection_queue_probe.py": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294",
+      "/home/rustsql/pgrust/scripts/validation/cluster.py": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2",
+      "/home/rustsql/pgrust/scripts/validation/resource_scope.py": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "server_cpu_max": "500000 100000"
+  },
+  "limitations": [
+    "Wave durations include client orchestration and diagnostic snapshots; they are not standalone authentication latency.",
+    "Startup-phase CPU covers the server cgroup between the before/after snapshots. The including-shutdown metric extends the same start to clean server shutdown so delayed cleanup is not hidden.",
+    "Short WSL x86-64 calibration; not a representative Linux-server qualification."
+  ]
+}

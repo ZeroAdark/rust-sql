@@ -987,6 +987,10 @@ fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
         relcache::SetRelationCacheTrimAtIdle(true);
     }
 
+    // Share setup allocations before the first command. Later handoffs use the existing idle timer, so busy
+    // sessions keep local current runs instead of transferring their ownership after every command.
+    pagepool::idle_point();
+
     let mut state = LoopState {
         send_ready_for_query: true,
         idle_in_transaction_timeout_enabled: false,

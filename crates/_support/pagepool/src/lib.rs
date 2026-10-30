@@ -511,8 +511,9 @@ pub fn on() -> bool {
     ON.load(Relaxed)
 }
 
-/// The session's idle point (after ReadyForQuery, before a thread parks): `PoolAlloc`'s cache runs and pending remote
-/// frees leave the thread. One relaxed load unless `PoolAlloc` serves the process.
+/// The session's idle point (after ReadyForQuery, before a thread parks): hand current small runs to other threads
+/// for reuse, and send pending remote frees. Live blocks stay valid. One relaxed load unless `PoolAlloc` serves the
+/// process; otherwise the scan is bounded by its fixed size classes, without walking partial or full lists.
 #[inline]
 pub fn idle_point() {
     #[cfg(all(feature = "global", not(target_family = "wasm")))]

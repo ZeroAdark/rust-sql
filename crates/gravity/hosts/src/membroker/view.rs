@@ -1002,6 +1002,10 @@ pub fn fc_pgrust_memory_owner_end(flinfo: Option<&mut FmgrInfo>, fcinfo: &mut Fc
             ("pool_free_listed", sat((st.shelved + st.central + st.parked) as u64), None),
             ("pool_unowned", unowned, age),
             ("pool_small_slack", small_slack, None),
+            // Allocated capacity by tag, not resident bytes; these components explain pool_small_slack.
+            ("pool_heap_capacity", sat(st.in_use[pagepool::Tag::HEAP.0 as usize] as u64), None),
+            ("pool_small_capacity", sat(st.in_use[pagepool::Tag::SMALL.0 as usize] as u64), None),
+            ("pool_cache_capacity", sat(st.in_use[pagepool::Tag::CACHE.0 as usize] as u64), None),
             ("pool_owner_rounding", owner_rounding, None),
             ("pool_run_tails", run_tails, None),
             ("pool_untouched", untouched, age),
