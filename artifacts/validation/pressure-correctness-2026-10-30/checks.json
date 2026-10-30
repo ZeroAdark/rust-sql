@@ -1,0 +1,124 @@
+{
+  "negative_controls": [
+    {
+      "name": "missing startup",
+      "rejected": true,
+      "reason": "startup timings"
+    },
+    {
+      "name": "wrong overflow SQLSTATE",
+      "rejected": true,
+      "reason": "overflow"
+    },
+    {
+      "name": "missing restart",
+      "rejected": true,
+      "reason": "churn result/restart"
+    },
+    {
+      "name": "CPU throttle",
+      "rejected": true,
+      "reason": "CPU throttling"
+    },
+    {
+      "name": "changed committed value",
+      "rejected": true,
+      "reason": "committed balances"
+    },
+    {
+      "name": "wrong result hash",
+      "rejected": true,
+      "reason": "SQL result"
+    },
+    {
+      "name": "leaked nested fileset",
+      "rejected": true,
+      "reason": "temporary file leak"
+    },
+    {
+      "name": "no physical spill",
+      "rejected": true,
+      "reason": "missing physical spill"
+    },
+    {
+      "name": "no live cancellation witness",
+      "rejected": true,
+      "reason": "live-spill cancellation"
+    },
+    {
+      "name": "wrong memory limit",
+      "rejected": true,
+      "reason": "spill limits"
+    },
+    {
+      "name": "wrong server binary",
+      "rejected": true,
+      "reason": "spill binary"
+    },
+    {
+      "name": "kernel OOM",
+      "rejected": true,
+      "reason": "OOM event"
+    }
+  ],
+  "cleanup_scanner_control": "Direct pgsql_tmp file and nested m35-run fileset entry both detected; empty pgsql_tmp accepted.",
+  "linux_replay": {
+    "verified_files": 178,
+    "production_qualified": false,
+    "results": {
+      "churn-full4g": {
+        "accepted": 80000,
+        "transactions": 20872,
+        "analytics": 27827,
+        "peak_mib": 2009.14453125,
+        "settled_mib": 275.55859375
+      },
+      "churn-full2g": {
+        "accepted": 80000,
+        "transactions": 20184,
+        "analytics": 26516,
+        "peak_mib": 1904.33203125,
+        "settled_mib": 275.03515625
+      },
+      "spill-final": {
+        "rows": 500000,
+        "result_comparisons": 12,
+        "limit_errors": 4,
+        "live_spill_cancellations": 4
+      },
+      "spill-million": {
+        "passed": false,
+        "finding": "memory watchdog canceled a one-million-row sort under 1 GiB"
+      },
+      "spill-million-diagnostic": {
+        "rows": 1000000,
+        "result_comparisons": 12,
+        "limit_errors": 4,
+        "live_spill_cancellations": 4
+      },
+      "spill-million-repeat1": {
+        "rows": 1000000,
+        "result_comparisons": 12,
+        "limit_errors": 4,
+        "live_spill_cancellations": 4
+      },
+      "spill-million-repeat2": {
+        "rows": 1000000,
+        "result_comparisons": 12,
+        "limit_errors": 4,
+        "live_spill_cancellations": 4
+      },
+      "spill-million-repeat3": {
+        "rows": 1000000,
+        "result_comparisons": 12,
+        "limit_errors": 4,
+        "live_spill_cancellations": 4
+      }
+    }
+  },
+  "windows_replay": {
+    "python": "3.14",
+    "verified_files": 178,
+    "passed": true
+  }
+}
