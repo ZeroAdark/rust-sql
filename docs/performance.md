@@ -199,3 +199,39 @@ python3 scripts/validation/compare_mixed.py \
 ```
 
 Run on an otherwise idle machine, with both binaries already built. Reports include throughput, p50/p95/p99 latency, server CPU seconds, sampled peak aggregate RSS, errors and binary hashes. Every run creates a separate cluster; the harness keeps logs/data for inspection and refuses to overwrite per-run JSON evidence. Increase duration and dataset/concurrency coverage for release decisions. See [qualification gates](production-readiness.md).
+
+## Allocator selection (2026-10-30)
+
+Keep Hearth as the default for the current CPU-first mixed workload. Selecting mimalloc reduces memory substantially, but fails the throughput and latency gates and increases CPU cost in every paired run. The runtime binary and default allocator are unchanged by this investigation.
+
+Both sides use binary SHA-256 `2f35e3a361d2b660a73c5aefb739af6178ee3f4dfbd5b9b63f48b165e5d5ec3c`. Five interleaved pairs at 4 GiB use four server CPUs, separate client CPUs, six ordinary-role clients, six active transactions, one million fact rows, and 400 measured plus 50 warmup bundles per client. The allocator is explicitly selected and verified with `SHOW pgrust.allocator` before measurement and after restart. All 456,000 measured statements and 96,000 measured committed updates pass; restart checks include the 12,000 warmup updates too.
+
+| Metric, median across five runs | Hearth | mimalloc | Change |
+| --- | ---: | ---: | ---: |
+| Server CPU microseconds / bundle | 15,461.77 | 16,111.17 | +4.20% |
+| Bundles / second | 239.21 | 213.72 | -10.66% |
+| Sampled peak server cgroup memory, MiB | 660.13 | 329.23 | -50.13% |
+| Sampled peak summed RSS, MiB | 709.28 | 435.52 | -38.60% |
+| Sampled peak summed PSS, MiB | 683.30 | 348.27 | -49.03% |
+
+Paired CPU increases range from 3.69% to 4.99%. Changes in median query p99 are read +3.33%, update +3.26%, aggregate +12.16%, range +4.99%, join +10.80%, and whole bundle +9.05%. No memory-limit, OOM or swap events occur. The first mimalloc measurement records 1,171 microseconds of CPU throttling; the other nine record zero. These are observed distributions from a short WSL calibration, not confidence intervals or a complete 1/2/4/8 GiB matrix.
+
+The separate 800-startup pilot with mimalloc passes under a 2 GiB cap at a 1,073,188,864-byte peak (1,023.47 MiB). The same connection configuration with Hearth had failed at 2 GiB. This capacity result does not outweigh the mixed-workload CPU and latency regression. An earlier environment-only pilot did not actually select mimalloc because the cluster helper strips inherited `PG*` variables; its Hearth log and failed verdict are retained as an invalid allocator control, not included in the comparison. Explicit cluster selections now survive that isolation and are checked against the running server. Validator tests reject missing or wrong allocator witnesses, changes after restart, and comparisons that change both binary and allocator.
+
+A separate read-only residency probe captures two held 800-startup phases with Hearth. Most resident memory is concentrated in three anonymous 1 GiB mappings separated by 2 MiB guards, consistent with the pool layout in `pagepool/src/reserve.rs`; this is an inference from the mappings and source, not a complete allocation attribution. The capture adds diagnostic overhead and is not a performance trial. Targeted pool memory work, a complete matrix and Linux-server qualification remain open. [Raw reports, sources, logs, residency captures and replay instructions](../artifacts/validation/allocator-selection-2026-10-30/README.md) preserve both the memory benefit and performance failure.
+
+Within a delegated service configured as described in [connection admission](connection-queue.md), reproduce the calibration with:
+
+```sh
+python3 scripts/validation/resource_workload.py \
+  --baseline /path/to/fork/bin --candidate /path/to/fork/bin \
+  --baseline-allocator hearth --candidate-allocator mimalloc \
+  --work-dir /tmp/rustsql-checks --output-dir artifacts/allocator-run \
+  --memory-mib 4096 --server-cpus 0 2 4 6 --client-cpus 8 10 \
+  --clients 6 --max-active-queries 6 --rows 1000000 \
+  --bundles 400 --warmup 50 --repeats 5
+python3 scripts/validation/compare_resource.py --calibration \
+  --input-dir artifacts/allocator-run --output artifacts/allocator-comparison.json
+```
+
+`--calibration` explicitly labels the 4 GiB scope. Without it, the comparison still requires the complete four-limit matrix. An allocator comparison requires one identical binary and two explicit distinct allocator choices; a binary comparison requires distinct binaries and identical explicit allocator choices, if any. No failed or refused query counts as useful throughput.

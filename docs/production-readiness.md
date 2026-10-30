@@ -18,6 +18,8 @@ Priority: reduce CPU cost first, while preserving correctness and latency. Memor
 
 The preceding transaction-admission binary passes 20 checked mixed-workload trials at 4 GiB. A six-transaction cap keeps CPU cost stable and query p99 changes within 3.07%; a four-transaction cap increases point-read p99 by 14.94% and fails the latency gate. Both results are retained in [the performance report](performance.md#transaction-admission-2026-10-30). These measurements do not benchmark the subsequent connection-queue change. A complete memory matrix for the latest binary remains open.
 
+The [allocator calibration](performance.md#allocator-selection-2026-10-30) keeps the current Hearth default: mimalloc halves sampled peak cgroup memory but increases median CPU per bundle by 4.20%, reduces throughput by 10.66%, and increases aggregate p99 by 12.16%. All ten trials pass correctness and restart checks; both performance gates fail. Its separate 2 GiB connection pilot passes, but does not justify a CPU/latency regression. Targeted pool memory work remains open.
+
 ## Acceptance policy
 
 SQL results and protocol remain the compatibility target. Truthful engine-specific EXPLAIN/statistics are accepted; unavailable counters must be absent. See the [approved contract, race reproduction and independent window oracle](compatibility-investigation.md). Raw PostgreSQL output and reviewed engine expectations remain separate profiles.

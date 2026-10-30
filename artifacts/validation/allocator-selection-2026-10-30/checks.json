@@ -1,0 +1,29 @@
+{
+  "production_qualified": false,
+  "runtime_default_changed": false,
+  "validator_tests": 133,
+  "correctness_passed": true,
+  "calibration_trials": 10,
+  "measured_statements": 456000,
+  "measured_committed_updates": 96000,
+  "warmup_committed_updates": 12000,
+  "restart_checks": 10,
+  "cpu_improvement": false,
+  "throughput_gate_passed": false,
+  "p99_gate_passed": false,
+  "memory_limit_events": 0,
+  "oom_events": 0,
+  "swap_events": 0,
+  "cpu_throttled_usec": [
+    1171,
+    0,
+    0,
+    0,
+    0
+  ],
+  "cpu_throttled_scope": "mimalloc measured phases; all five Hearth phases zero",
+  "valid_mimalloc_connection_pilot_passed": true,
+  "valid_mimalloc_connection_pilot_peak_bytes": 1073188864,
+  "residency_capture_passed": true,
+  "residency_is_performance_trial": false
+}

@@ -31,6 +31,26 @@ def comparison(baseline, candidate):
                                   'min': min(changes), 'max': max(changes)}}
 
 
+def validate_design(metadata):
+    binaries = metadata.get('binaries', {})
+    require(set(binaries) == {'baseline', 'candidate'}, 'missing binary identities')
+    require(all(re.fullmatch('[0-9a-f]{64}', info.get('sha256', '')) for info in binaries.values()), 'invalid binary hash')
+    kind = metadata.get('comparison_kind', 'binary')
+    require(kind in ('binary', 'allocator'), 'unknown comparison kind')
+    allocators = metadata.get('allocators')
+    if allocators is not None:
+        require(set(allocators) == {'baseline', 'candidate'}
+                and all(value in (None, 'hearth', 'mimalloc') for value in allocators.values()), 'invalid allocator selections')
+        require((allocators['baseline'] is None) == (allocators['candidate'] is None), 'partial allocator selection')
+    same_binary = binaries['baseline']['sha256'] == binaries['candidate']['sha256']
+    if kind == 'allocator':
+        require(same_binary and allocators is not None and set(allocators.values()) == {'hearth', 'mimalloc'},
+                'allocator comparison must change only the allocator, with the same binary')
+    else:
+        require(not same_binary, 'baseline and candidate are the same binary')
+        require(allocators is None or allocators['baseline'] == allocators['candidate'], 'binary and allocator changes are confounded')
+
+
 def validate_trial(report, metadata, identity):
     label, memory, repetition = identity
     require((report['label'], report['memory_mib'], report['repetition']) == identity, 'trial identity mismatch')
@@ -46,6 +66,12 @@ def validate_trial(report, metadata, identity):
     require(type(active_limit) is int and 1 <= active_limit <= 16, 'invalid admission limit')
     require(settings['fsync'] == 'on' and settings['synchronous_commit'] == 'on'
             and settings['max_active_queries'] == str(active_limit) and settings['work_mem'] == '16384', 'durability or workload settings differ')
+    if 'allocators' in metadata:
+        requested = metadata['allocators'][label]
+        witness = report.get('allocator', {})
+        require(witness.get('requested') == requested and witness.get('before') in ('hearth', 'mimalloc')
+                and witness.get('after_restart') == witness.get('before')
+                and (requested is None or witness.get('before') == requested), 'allocator witness differs or is missing')
     measurement = report['measurement']
     require(measurement['passed'] is True, 'failed measurement')
     for recorded, argument in (('clients', 'clients'), ('bundles_per_client', 'bundles'),
@@ -88,17 +114,17 @@ def validate_trial(report, metadata, identity):
     return measurement
 
 
-def analyze(root, source_dir):
+def analyze(root, source_dir, *, calibration=False):
     metadata = json.loads((root / 'metadata.json').read_text())
     summary = json.loads((root / 'summary.json').read_text())
     require(summary['complete'] is True and summary['passed'] is True, 'incomplete or failed campaign')
-    binaries = metadata.get('binaries', {})
-    require(set(binaries) == {'baseline', 'candidate'}, 'missing binary identities')
-    require(all(re.fullmatch(r'[0-9a-f]{64}', entry.get('sha256', '')) for entry in binaries.values()), 'invalid binary digest')
-    require(binaries['baseline']['sha256'] != binaries['candidate']['sha256'], 'baseline and candidate are the same binary')
+    validate_design(metadata)
     require(metadata['statements_per_bundle'] == PER_BUNDLE, 'query mix differs')
     require(metadata['repeats'] >= 5, 'at least five paired repetitions required')
-    require(metadata['memory_mib'] == [1024, 2048, 4096, 8192], 'complete 1/2/4/8 GiB matrix required')
+    if calibration:
+        require(metadata['memory_mib'] == [4096], 'calibration requires the 4 GiB limit only')
+    else:
+        require(metadata['memory_mib'] == [1024, 2048, 4096, 8192], 'complete 1/2/4/8 GiB matrix required')
     require(not set(metadata['server_cpus']) & set(metadata['client_cpus']), 'client and server CPUs overlap')
     expected_sources = {'resource_workload.py', 'resource_scope.py', 'fixed_workload.py', 'cluster.py'}
     require(set(metadata['source_lf_sha256']) == expected_sources, 'harness source set differs')
@@ -142,6 +168,7 @@ def analyze(root, source_dir):
                                              for repetition in range(1, metadata['repeats'] + 1)] for label in ('baseline', 'candidate')}
         results.append(item)
     return {'evidence_valid': True, 'production_qualified': False, 'trials': len(measurements),
+            'scope': '4 GiB calibration only' if calibration else 'complete 1/2/4/8 GiB matrix',
             'measured_statements': len(measurements) * metadata['clients'] * metadata['bundles'] * sum(PER_BUNDLE.values()),
             'metadata': metadata, 'limits': results,
             'interpretation': 'Observed five-run distributions on this host, not a confidence interval or production acceptance. Inspect paired variation and query-specific tails; memory caps do not establish overload safety.'}
@@ -152,8 +179,9 @@ def main():
     parser.add_argument('--input-dir', type=Path, required=True)
     parser.add_argument('--source-dir', type=Path, default=Path(__file__).parent)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--calibration', action='store_true', help='explicitly analyze a 4 GiB calibration, not a full memory matrix')
     args = parser.parse_args()
-    result = analyze(args.input_dir, args.source_dir)
+    result = analyze(args.input_dir, args.source_dir, calibration=args.calibration)
     with args.output.open('x') as stream:
         json.dump(result, stream, indent=2)
         stream.write('\n')

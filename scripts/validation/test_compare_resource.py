@@ -72,6 +72,74 @@ class ResourceEvidenceTests(unittest.TestCase):
         self.assertEqual(result['measured_statements'], 40 * 2 * 19)
         self.assertEqual(result['limits'][0]['cpu_us_per_bundle']['paired_change_pct']['values'], [0] * 5)
 
+    def allocator_fixture(self):
+        self.metadata.update(comparison_kind='allocator', allocators={'baseline': 'hearth', 'candidate': 'mimalloc'})
+        self.metadata['binaries']['candidate']['sha256'] = self.metadata['binaries']['baseline']['sha256']
+        self.write('metadata.json', self.metadata)
+        for item in self.summary['trials']:
+            report = json.loads((self.root / item['file']).read_text())
+            selected = self.metadata['allocators'][item['label']]
+            report['allocator'] = {'requested': selected, 'before': selected, 'after_restart': selected}
+            self.write(item['file'], report)
+
+    def test_allocator_comparison_requires_observed_selection_on_the_same_binary(self):
+        self.allocator_fixture()
+        result = analyze(self.root, self.sources)
+        self.assertTrue(result['evidence_valid'])
+        self.assertFalse(result['production_qualified'])
+
+    def test_changed_binary_or_missing_allocator_control_fails_closed(self):
+        self.allocator_fixture()
+        for mutate in (lambda m: m['binaries']['candidate'].update(sha256='1' * 64),
+                       lambda m: m.pop('allocators'), lambda m: m.update(comparison_kind='unknown'),
+                       lambda m: m['allocators'].update(candidate='hearth'),
+                       lambda m: m['allocators'].update(candidate=None),
+                       lambda m: m['allocators'].update(candidate='unknown')):
+            with self.subTest(mutate=mutate):
+                value = copy.deepcopy(self.metadata)
+                mutate(value)
+                self.write('metadata.json', value)
+                with self.assertRaises(ValueError):
+                    analyze(self.root, self.sources)
+
+    def test_wrong_or_missing_live_allocator_witness_fails_closed(self):
+        self.allocator_fixture()
+        name = 'candidate-4096-1.json'
+        original = json.loads((self.root / name).read_text())
+        for mutate in (lambda r: r.pop('allocator'),
+                       lambda r: r['allocator'].update(requested='hearth'),
+                       lambda r: r['allocator'].update(before='hearth'),
+                       lambda r: r['allocator'].update(after_restart='hearth')):
+            with self.subTest(mutate=mutate):
+                value = copy.deepcopy(original)
+                mutate(value)
+                self.write(name, value)
+                with self.assertRaisesRegex(ValueError, 'allocator witness'):
+                    analyze(self.root, self.sources)
+
+    def test_binary_comparison_cannot_change_explicit_allocator_too(self):
+        self.metadata.update(allocators={'baseline': 'hearth', 'candidate': 'mimalloc'})
+        self.write('metadata.json', self.metadata)
+        with self.assertRaisesRegex(ValueError, 'confounded'):
+            analyze(self.root, self.sources)
+
+    def test_calibration_requires_explicit_scope_and_complete_pairs(self):
+        self.allocator_fixture()
+        self.metadata['memory_mib'] = [4096]
+        self.summary['trials'] = [item for item in self.summary['trials'] if item['memory_mib'] == 4096]
+        self.write('metadata.json', self.metadata)
+        self.write('summary.json', self.summary)
+        with self.assertRaisesRegex(ValueError, 'complete 1/2/4/8'):
+            analyze(self.root, self.sources)
+        result = analyze(self.root, self.sources, calibration=True)
+        self.assertEqual(result['trials'], 10)
+        self.assertEqual(result['scope'], '4 GiB calibration only')
+        self.assertFalse(result['production_qualified'])
+        self.summary['trials'].pop()
+        self.write('summary.json', self.summary)
+        with self.assertRaisesRegex(ValueError, 'missing or duplicated'):
+            analyze(self.root, self.sources, calibration=True)
+
     def test_incomplete_missing_and_duplicate_runs_fail_closed(self):
         for mutate in (lambda s: s.update(complete=False), lambda s: s['trials'].pop(),
                        lambda s: s['trials'].__setitem__(0, s['trials'][1])):

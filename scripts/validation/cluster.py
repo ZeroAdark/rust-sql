@@ -8,9 +8,11 @@ import time
 
 
 class Cluster:
-    def __init__(self, binaries, work_dir, *, reference=False, settings=(), launcher=()):
+    def __init__(self, binaries, work_dir, *, reference=False, settings=(), launcher=(), allocator=None):
         if os.geteuid() == 0:
             raise RuntimeError("run validation as a non-root user")
+        if allocator not in (None, "hearth", "mimalloc") or (reference and allocator is not None):
+            raise ValueError("allocator selection requires hearth or mimalloc on the fork")
         self.binaries = Path(binaries).resolve()
         Path(work_dir).mkdir(parents=True, exist_ok=True)
         self.root = Path(tempfile.mkdtemp(prefix="compat-", dir=work_dir))
@@ -19,6 +21,11 @@ class Cluster:
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("PG")}
         self.env.update(PGHOST=str(self.socket), PGPORT="55440", PGUSER="rustsql", PGDATABASE="postgres",
                         PGCONNECT_TIMEOUT="3", RUST_MIN_STACK="33554432", PGAPPNAME="rustsql-validation")
+        self.requested_allocator = allocator
+        if allocator is not None:
+            # PG-prefixed host variables are deliberately stripped above.
+            # Only an explicit experiment selection may override that isolation.
+            self.env["PGRUST_ALLOCATOR"] = allocator
         self.reference, self.settings = reference, list(settings)
         self.launcher = list(launcher)
         self.process, self.log = None, None
@@ -63,6 +70,10 @@ class Cluster:
                     version = conn.execute("SELECT version()").fetchone()[0]
                     if ("pgrust" in version) == self.reference:
                         raise RuntimeError(f"unexpected server: {version}")
+                    if self.requested_allocator is not None:
+                        actual = conn.execute("SHOW pgrust.allocator").fetchone()[0]
+                        if actual != self.requested_allocator:
+                            raise RuntimeError(f"allocator mismatch: requested {self.requested_allocator}, got {actual}")
                     self.version = version
                     return
             except psycopg.OperationalError:
