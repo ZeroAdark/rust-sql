@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "reason": "Reviewed EXPLAIN-only helper omits unavailable PostgreSQL sort statistics and shows Gravity diagnostics; actual root rows/loops and query data remain unchanged.",
+  "source_sha256": "3442c4351cce0a18003c2b4e7cc4f777502179f56357776395b275e24756e125",
+  "expected_sha256": "32ec2cfdcd76f2a54d55306ce38a4e9598a72f941951f3243912c5ada9846824",
+  "plans": [
+    {
+      "sql_sha256": "0bfbbe0e044445567ab257cec2b896fd63e90a3b1c3dadf283600de15815f6f2",
+      "occurrence": 1,
+      "sql_line": 1064,
+      "kind": "text_plan",
+      "before_sha256": "716bbcbdc67a9d2e18a53a08a7c6f77a3c73d7d37774f4c7acbcdd4e515de201",
+      "after": "                         explain_sq_limit                          \n-------------------------------------------------------------------\n Limit (actual rows=3.00 loops=1)\n   ->  Subquery Scan on x (actual rows=3.00 loops=1)\n         ->  Sort (actual rows=3.00 loops=1)\n               Sort Key: sq_limit.c1, sq_limit.pk\n               ->  Seq Scan on sq_limit (actual rows=8.00 loops=1)\n Gravity: driver road, 2 pipelines, 2 sites, 1 sections, 0 claims\n   p0  serial\n   p1  emit (NoDrivingSite)\n   Program: admitted, shape GRAPH\n(9 rows)\n"
+    }
+  ]
+}

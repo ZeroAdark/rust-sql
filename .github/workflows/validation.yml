@@ -77,6 +77,9 @@ jobs:
           python3 scripts/validation/choice_contract.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/choice-contract.json
+          python3 scripts/validation/diagnostics_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/diagnostics-contract.json
           python3 scripts/validation/catalog_churn_probe.py --candidate target/release \
             --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
             --output artifacts/catalog-churn.json

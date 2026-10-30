@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "reason": "Reviewed EXPLAIN-only helper preserves root row counts while unavailable per-node counters are absent; join query values remain strict.",
+  "source_sha256": "1013722d8b8484b47d9aed1d2c0fe9b5fffa6537f9973cfbf4efaf6932168510",
+  "expected_sha256": "f37ada978234e8fd755bae8f32e05bb869d8045204527ad7282ba375d3dab6a2",
+  "plans": [
+    {
+      "sql_sha256": "a5da7d903ddf55eccad9d5c4a16f666b0f80b28ec70882c02deee6c7f166d880",
+      "occurrence": 1,
+      "sql_line": 62,
+      "kind": "text_plan",
+      "before_sha256": "f35ac26d9d33e5732b3b0732d6272ca5cc94aa8a81833128916340cf100f531b",
+      "after": "                                         explain_memoize                                         \n-------------------------------------------------------------------------------------------------\n Aggregate (actual rows=1.00 loops=N)\n   ->  Nested Loop Left Join (actual rows=20.00 loops=N)\n         ->  Index Scan using tenk1_unique1 on tenk1 t1 (actual rows=10.00 loops=N)\n               Index Cond: (unique1 < 10)\n               Index Searches: N\n         ->  Memoize (actual rows=2.00 loops=N)\n               Cache Key: t1.two\n               Cache Mode: binary\n               Hits: 8  Misses: 2  Evictions: Zero  Overflows: 0  Memory Usage: NkB\n               ->  Subquery Scan on t2 (actual rows=2.00 loops=N)\n                     Filter: (t1.two = t2.two)\n                     ->  Index Scan using tenk1_unique1 on tenk1 t2_1 (actual rows=4.00 loops=N)\n                           Index Cond: (unique1 < 4)\n                           Index Searches: N\n(14 rows)\n"
+    },
+    {
+      "sql_sha256": "d70d244509adf42e6ed4294c6a15c9575ae1e3bcbc749c50186dc06f3115bbea",
+      "occurrence": 1,
+      "sql_line": 118,
+      "kind": "text_plan",
+      "before_sha256": "3fe7b2079e76c9e5e205eb6c984ccf87e6ec5b6cb2af2162964cd33933c51a26",
+      "after": "                                     explain_memoize                                     \n-----------------------------------------------------------------------------------------\n Nested Loop (actual rows=80.00 loops=N)\n   ->  Seq Scan on expr_key t1 (actual rows=40.00 loops=N)\n   ->  Memoize (actual rows=2.00 loops=N)\n         Cache Key: t1.x, (t1.t)::numeric\n         Cache Mode: logical\n         ->  Index Only Scan using expr_key_idx_x_t on expr_key t2 (actual: not counted)\n               Index Cond: (x = (t1.t)::numeric)\n               Filter: (t1.x = (t)::numeric)\n(8 rows)\n"
+    },
+    {
+      "sql_sha256": "fa39a76f674a280784ac4197d890b3db8ceb9f64a24aecee844e64f1b13d7f23",
+      "occurrence": 1,
+      "sql_line": 143,
+      "kind": "text_plan",
+      "before_sha256": "7745052cc5cd7244d49ca27df13a3d1b86432e38e621d11b191574d94c23ea80",
+      "after": "                                 explain_memoize                                  \n----------------------------------------------------------------------------------\n Nested Loop (actual rows=4.00 loops=N)\n   ->  Index Only Scan using flt_f_idx on flt f1 (actual rows=2.00 loops=N)\n         Heap Fetches: N\n         Index Searches: N\n   ->  Memoize (actual rows=2.00 loops=N)\n         Cache Key: f1.f\n         Cache Mode: logical\n         ->  Index Only Scan using flt_f_idx on flt f2 (actual rows=2.00 loops=N)\n               Index Cond: (f = f1.f)\n               Heap Fetches: N\n               Index Searches: N\n(11 rows)\n"
+    },
+    {
+      "sql_sha256": "2b9a53cb59d95c2b725652ffda7ca0261ec7bbf764e64fb4a643b0b83d380998",
+      "occurrence": 1,
+      "sql_line": 147,
+      "kind": "text_plan",
+      "before_sha256": "39952324737161d2460374ba40f66ac22c226a338e7e70d7ccf1551fbfa7860b",
+      "after": "                                 explain_memoize                                  \n----------------------------------------------------------------------------------\n Nested Loop (actual rows=4.00 loops=N)\n   ->  Index Only Scan using flt_f_idx on flt f1 (actual rows=2.00 loops=N)\n         Heap Fetches: N\n         Index Searches: N\n   ->  Memoize (actual rows=2.00 loops=N)\n         Cache Key: f1.f\n         Cache Mode: binary\n         ->  Index Only Scan using flt_f_idx on flt f2 (actual rows=2.00 loops=N)\n               Index Cond: (f <= f1.f)\n               Heap Fetches: N\n               Index Searches: N\n(11 rows)\n"
+    },
+    {
+      "sql_sha256": "df50261e12e24ea720c073d4dbcbe17c5ad2653b4f460cb522887757b1022ce0",
+      "occurrence": 1,
+      "sql_line": 163,
+      "kind": "text_plan",
+      "before_sha256": "77070053f00edbb86c97df8a561d56bb4dccff8f2d13c3f8dd77034a7362be47",
+      "after": "                                   explain_memoize                                   \n-------------------------------------------------------------------------------------\n Nested Loop (actual rows=24.00 loops=N)\n   ->  Seq Scan on strtest s1 (actual rows=6.00 loops=N)\n         Disabled: true\n   ->  Memoize (actual rows=4.00 loops=N)\n         Cache Key: s1.n\n         Cache Mode: binary\n         ->  Index Scan using strtest_n_idx on strtest s2 (actual rows=4.00 loops=N)\n               Index Cond: (n <= s1.n)\n               Index Searches: N\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "622a49001764a12301558e155f9cd8e166ce74015ed120dceabcfdd8856fb94b",
+      "occurrence": 1,
+      "sql_line": 167,
+      "kind": "text_plan",
+      "before_sha256": "bb0e7d5f57bee5335f6faedd7ae7ade8605ec2960922f0a01410a69f923fc184",
+      "after": "                                   explain_memoize                                   \n-------------------------------------------------------------------------------------\n Nested Loop (actual rows=24.00 loops=N)\n   ->  Seq Scan on strtest s1 (actual rows=6.00 loops=N)\n         Disabled: true\n   ->  Memoize (actual rows=4.00 loops=N)\n         Cache Key: s1.t\n         Cache Mode: binary\n         ->  Index Scan using strtest_t_idx on strtest s2 (actual rows=4.00 loops=N)\n               Index Cond: (t <= s1.t)\n               Index Searches: N\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "c71e65a968c6c472d59caf5c3f89edc227509270974e3de1d8b34c3098899a2c",
+      "occurrence": 1,
+      "sql_line": 233,
+      "kind": "text_plan",
+      "before_sha256": "d851ce98ab47c477e50072f471f48af47421a393359811e113807e60357bb761",
+      "after": "                            QUERY PLAN                             \n-------------------------------------------------------------------\n Aggregate\n   ->  Nested Loop\n         ->  Bitmap Heap Scan on tenk1 t1\n               Recheck Cond: (unique1 < 1000)\n               ->  Bitmap Index Scan on tenk1_unique1\n                     Index Cond: (unique1 < 1000)\n         ->  Memoize\n               Cache Key: t1.twenty\n               Cache Mode: logical\n               ->  Index Only Scan using tenk1_unique1 on tenk1 t2\n                     Index Cond: (unique1 = t1.twenty)\n(11 rows)\n"
+    }
+  ]
+}

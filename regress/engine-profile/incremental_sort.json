@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "reason": "Reviewed EXPLAIN helpers omit simulated PostgreSQL sort-group statistics; measured root/incremental-sort rows and loops stay identical; all other values remain strict.",
+  "source_sha256": "22f4767e7e78811431e9f42a275b12394ec591c65562914c702fb96897395ec1",
+  "expected_sha256": "8899127ed614f8250bbb03a359c822f4b9a2439949ac2add7a81ab8caf8b972b",
+  "plans": [
+    {
+      "sql_sha256": "69b5ec797637faabcf26bdf0cab1b1e395aab64041cbe1a50d1f59de9424b876",
+      "occurrence": 1,
+      "sql_line": 137,
+      "kind": "text_plan",
+      "before_sha256": "cbde75222fa7fad970dc899fb8f8e8579691d0b443bd31f8acf1702c1c76ce6d",
+      "after": "                  explain_analyze_without_memory                  \n------------------------------------------------------------------\n Limit (actual rows=55.00 loops=1)\n   ->  Incremental Sort (actual rows=55.00 loops=1)\n         Sort Key: t.a, t.b\n         Presorted Key: t.a\n         ->  Sort (actual rows=101.00 loops=1)\n               Sort Key: t.a\n               ->  Seq Scan on t (actual rows=1000.00 loops=1)\n Gravity: driver road, 3 pipelines, 2 sites, 1 sections, 0 claims\n   p0  serial\n   p1  emit (NoDrivingSite)\n   p2  emit (NoDrivingSite)\n   Program: admitted, shape GRAPH\n(12 rows)\n"
+    },
+    {
+      "sql_sha256": "3fe9a54b4dbbc81f5a11281dbe666b386212d1bafce79253c210b845aaaa7acc",
+      "occurrence": 1,
+      "sql_line": 138,
+      "kind": "incremental_sort_json",
+      "before_sha256": "ecda0db79974bf9e9878d4f47ea1d76f2bcbca2849867a78f612498b8480acfc",
+      "after": "               jsonb_pretty               \n------------------------------------------\n [                                       +\n     {                                   +\n         \"Disabled\": false,              +\n         \"Sort Key\": [                   +\n             \"t.a\",                      +\n             \"t.b\"                       +\n         ],                              +\n         \"Node Type\": \"Incremental Sort\",+\n         \"Actual Rows\": 55.00,           +\n         \"Actual Loops\": 1,              +\n         \"Async Capable\": false,         +\n         \"Presorted Key\": [              +\n             \"t.a\"                       +\n         ],                              +\n         \"Parallel Aware\": false,        +\n         \"Parent Relationship\": \"Outer\"  +\n     }                                   +\n ]\n(1 row)\n"
+    },
+    {
+      "sql_sha256": "f551e12b9900a4a10478e772a73c67391e4e1b76f3b49d0583b5eaacb6beb7fc",
+      "occurrence": 1,
+      "sql_line": 166,
+      "kind": "text_plan",
+      "before_sha256": "b47f6466c05dcc402fe09ea9a5e27962b7d42a36fa568e44d7ce365cb7b33a50",
+      "after": "                  explain_analyze_without_memory                  \n------------------------------------------------------------------\n Limit (actual rows=70.00 loops=1)\n   ->  Incremental Sort (actual rows=70.00 loops=1)\n         Sort Key: t.a, t.b\n         Presorted Key: t.a\n         ->  Sort (actual rows=1000.00 loops=1)\n               Sort Key: t.a\n               ->  Seq Scan on t (actual rows=1000.00 loops=1)\n Gravity: driver road, 3 pipelines, 2 sites, 1 sections, 0 claims\n   p0  serial\n   p1  emit (NoDrivingSite)\n   p2  emit (NoDrivingSite)\n   Program: admitted, shape GRAPH\n(12 rows)\n"
+    },
+    {
+      "sql_sha256": "6828401f2c5ad90c54a48aa79094123b10e8e9733a01a4e4b6ecbaedc92f366e",
+      "occurrence": 1,
+      "sql_line": 167,
+      "kind": "incremental_sort_json",
+      "before_sha256": "74e060bb773eb1589560a55603e540e85d99ed1bd0f7b12bcb63e6281cb25120",
+      "after": "               jsonb_pretty               \n------------------------------------------\n [                                       +\n     {                                   +\n         \"Disabled\": false,              +\n         \"Sort Key\": [                   +\n             \"t.a\",                      +\n             \"t.b\"                       +\n         ],                              +\n         \"Node Type\": \"Incremental Sort\",+\n         \"Actual Rows\": 70.00,           +\n         \"Actual Loops\": 1,              +\n         \"Async Capable\": false,         +\n         \"Presorted Key\": [              +\n             \"t.a\"                       +\n         ],                              +\n         \"Parallel Aware\": false,        +\n         \"Parent Relationship\": \"Outer\"  +\n     }                                   +\n ]\n(1 row)\n"
+    },
+    {
+      "sql_sha256": "5fdc256ea711b2582e01e68c92bed457d8bd3738d3740c65e18b65c3bf2c6f84",
+      "occurrence": 1,
+      "sql_line": 216,
+      "kind": "text_plan",
+      "before_sha256": "5a3be56d344736a9ecb4aae104a4e29adc4eb795e911cbc991979ec343a28532",
+      "after": "            QUERY PLAN            \n----------------------------------\n Limit\n   ->  Sort\n         Sort Key: a, b, (sum(c))\n         ->  HashAggregate\n               Group Key: a, b\n               ->  Seq Scan on t\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "5fdc256ea711b2582e01e68c92bed457d8bd3738d3740c65e18b65c3bf2c6f84",
+      "occurrence": 2,
+      "sql_line": 219,
+      "kind": "text_plan",
+      "before_sha256": "b9eabf89e659595846bfa5d116da6dce31f989c092299cc77921059dc4c92ef5",
+      "after": "                      QUERY PLAN                       \n-------------------------------------------------------\n Limit\n   ->  Incremental Sort\n         Sort Key: a, b, (sum(c))\n         Presorted Key: a, b\n         ->  GroupAggregate\n               Group Key: a, b\n               ->  Incremental Sort\n                     Sort Key: a, b\n                     Presorted Key: a\n                     ->  Index Scan using t_a_idx on t\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "baee0e0b641b8e2a854e950b660e7e950841f0d04ae67c1c2f986c25cc6b78c9",
+      "occurrence": 1,
+      "sql_line": 223,
+      "kind": "text_plan",
+      "before_sha256": "978f44e04b24643d4183215c7e74d0aa6d173c751a3624364d14e0453f13a24b",
+      "after": "                    QUERY PLAN                     \n---------------------------------------------------\n Incremental Sort\n   Sort Key: t.a, t.c\n   Presorted Key: t.a\n   ->  Unique\n         ->  Merge Append\n               Sort Key: t.a, t.b, t.c\n               ->  Sort\n                     Sort Key: t.a, t.b, t.c\n                     ->  Seq Scan on t\n               ->  Sort\n                     Sort Key: t_1.a, t_1.b, t_1.c\n                     ->  Seq Scan on t t_1\n(12 rows)\n"
+    },
+    {
+      "sql_sha256": "4c6055185271849a64b9d144c4c82dbc5074bb45f4104b80b9aefc8c03607e16",
+      "occurrence": 1,
+      "sql_line": 227,
+      "kind": "text_plan",
+      "before_sha256": "94413296a3ea8f6a60cca301e60399b5fb89114615c2df1c65e41c98c03c4299",
+      "after": "        QUERY PLAN         \n---------------------------\n Unique\n   ->  Sort\n         Sort Key: a, b\n         ->  Seq Scan on t\n(4 rows)\n"
+    },
+    {
+      "sql_sha256": "d5d65207393083d2995c2f130ed333e9867e513449e0b443dec2d5227b656d63",
+      "occurrence": 1,
+      "sql_line": 244,
+      "kind": "text_plan",
+      "before_sha256": "d5f4375dff4664e1ad939f73625acf792d84c95272b39e0bb1f9ab1a919e924c",
+      "after": "                           QUERY PLAN                            \n-----------------------------------------------------------------\n Unique\n   ->  Sort\n         Sort Key: tenk1.unique1, tenk1.stringu1\n         ->  Nested Loop\n               ->  Function Scan on generate_series\n               ->  Materialize\n                     ->  Index Scan using tenk1_unique1 on tenk1\n(7 rows)\n"
+    },
+    {
+      "sql_sha256": "4399d42bffe7c0b38b52bb10344753964adee5ef8d12cdae09e01bcf7d4265a8",
+      "occurrence": 1,
+      "sql_line": 246,
+      "kind": "text_plan",
+      "before_sha256": "a071cfe88f14b1fb327f27ae11a0e69d89cafe9729a2c54c2cc8ccac30441b76",
+      "after": "                        QUERY PLAN                         \n-----------------------------------------------------------\n Sort\n   Sort Key: tenk1.unique1, tenk1.stringu1\n   ->  Nested Loop\n         ->  Function Scan on generate_series\n         ->  Materialize\n               ->  Index Scan using tenk1_unique1 on tenk1\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "f5a93fe27656c85d6f696e18d6a87c632828a87067a8e6c93266ddc1cf63588e",
+      "occurrence": 1,
+      "sql_line": 250,
+      "kind": "text_plan",
+      "before_sha256": "eb02d7f9dab98c010235157117ebafc8cfc4ad5206fcbf134e027425e3e2aeca",
+      "after": "                                 QUERY PLAN                                 \n----------------------------------------------------------------------------\n Unique\n   ->  Sort\n         Sort Key: tenk1.unique1, (md5((tenk1.stringu1)::text)) COLLATE \"C\"\n         ->  Nested Loop\n               ->  Function Scan on generate_series\n               ->  Materialize\n                     ->  Index Scan using tenk1_unique1 on tenk1\n(7 rows)\n"
+    },
+    {
+      "sql_sha256": "2ba9aa258b8b298ced1f18cdfa84fbc85bc1eab7c0373a0a84115fbae111b758",
+      "occurrence": 1,
+      "sql_line": 252,
+      "kind": "text_plan",
+      "before_sha256": "fb9408fe742fcbbbea14b37faac76c864044cac1df2c362fab95f91eacc633d6",
+      "after": "                              QUERY PLAN                              \n----------------------------------------------------------------------\n Sort\n   Sort Key: tenk1.unique1, (md5((tenk1.stringu1)::text)) COLLATE \"C\"\n   ->  Nested Loop\n         ->  Function Scan on generate_series\n         ->  Materialize\n               ->  Index Scan using tenk1_unique1 on tenk1\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "03d85d90d8ea5f2fedf868cb46ddf452f1178a3fedde9b1dab0fd1a1e6ccb5ee",
+      "occurrence": 1,
+      "sql_line": 257,
+      "kind": "text_plan",
+      "before_sha256": "6f93d319115c917875e33e639f951e5b1963858892ea5ebed479a1d4dfdd628f",
+      "after": "                               QUERY PLAN                                \n-------------------------------------------------------------------------\n Sort\n   Sort Key: (count(*))\n   ->  Aggregate\n         ->  Hash Join\n               Hash Cond: (t2.unique1 = t3.unique1)\n               ->  Merge Join\n                     Merge Cond: (t1.unique1 = t2.unique2)\n                     ->  Index Only Scan using tenk1_unique1 on tenk1 t1\n                     ->  Index Scan using tenk1_unique2 on tenk1 t2\n               ->  Hash\n                     ->  Index Only Scan using tenk1_unique1 on tenk1 t3\n(11 rows)\n"
+    },
+    {
+      "sql_sha256": "dd57e6408f0578655e242392c26c9a69a042ddd091663e295e654eb14ecf5e37",
+      "occurrence": 1,
+      "sql_line": 264,
+      "kind": "text_plan",
+      "before_sha256": "fbef59698a368e1069737d07ef237b5627d911ca03f2a11270f4e3c334041103",
+      "after": "                               QUERY PLAN                               \n------------------------------------------------------------------------\n Unique\n   ->  Sort\n         Sort Key: t.unique1, ((SubPlan 1))\n         ->  Nested Loop\n               ->  Function Scan on generate_series\n               ->  Materialize\n                     ->  Index Only Scan using tenk1_unique1 on tenk1 t\n               SubPlan 1\n                 ->  Index Only Scan using tenk1_unique1 on tenk1\n                       Index Cond: (unique1 = t.unique1)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "72886ddc1856cdded0ea26c87e03d011b8194341de82959e49b446d4d3955249",
+      "occurrence": 1,
+      "sql_line": 268,
+      "kind": "text_plan",
+      "before_sha256": "161d2125441113f581714718d9906d64555797a3b1a301cbcb793e72f3fdde82",
+      "after": "                            QUERY PLAN                            \n------------------------------------------------------------------\n Sort\n   Sort Key: t.unique1, ((SubPlan 1))\n   ->  Nested Loop\n         ->  Function Scan on generate_series\n         ->  Materialize\n               ->  Index Only Scan using tenk1_unique1 on tenk1 t\n         SubPlan 1\n           ->  Index Only Scan using tenk1_unique1 on tenk1\n                 Index Cond: (unique1 = t.unique1)\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "bf7588bf12278916244b2a52bc03c03723b40e58d4c3f51fb96241a83eae80d5",
+      "occurrence": 1,
+      "sql_line": 274,
+      "kind": "text_plan",
+      "before_sha256": "3023f07749abb84687b358922da809fff9f4efadcb0f5134da7241d3269924f3",
+      "after": "                                         QUERY PLAN                                          \n---------------------------------------------------------------------------------------------\n Unique\n   ->  Sort\n         Sort Key: tenk1.unique1, (((tenk1.stringu1)::text || (random())::text)) COLLATE \"C\"\n         ->  Nested Loop\n               ->  Function Scan on generate_series\n               ->  Materialize\n                     ->  Index Scan using tenk1_unique1 on tenk1\n(7 rows)\n"
+    },
+    {
+      "sql_sha256": "e054a893ce3f3fd0475f465ae4ec35fb93f1959bd124a6610086f54fee4760e6",
+      "occurrence": 1,
+      "sql_line": 276,
+      "kind": "text_plan",
+      "before_sha256": "515ec2dcdbb2874d85ae66b9812d5a179a30d0d713b496370f9800d9484f86f8",
+      "after": "                                      QUERY PLAN                                       \n---------------------------------------------------------------------------------------\n Sort\n   Sort Key: tenk1.unique1, (((tenk1.stringu1)::text || (random())::text)) COLLATE \"C\"\n   ->  Nested Loop\n         ->  Function Scan on generate_series\n         ->  Materialize\n               ->  Index Scan using tenk1_unique1 on tenk1\n(6 rows)\n"
+    }
+  ]
+}

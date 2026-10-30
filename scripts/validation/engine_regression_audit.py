@@ -10,6 +10,9 @@ from pathlib import Path
 
 from compare_regression import compare
 from engine_regression_profile import apply, digest, read
+from choice_witness import compare_choices
+from choice_witness import POLICY as CHOICE_POLICY
+from diagnostic_policy import POLICY as DIAGNOSTIC_POLICY
 
 
 def audit(fixtures, reference, candidate, profiles, output):
@@ -34,7 +37,7 @@ def audit(fixtures, reference, candidate, profiles, output):
                 raise ValueError("native control does not match a pinned PostgreSQL expectation")
             result.update(base_expectation=base.name, source_sha256=digest(source),
                           native_sha256=digest(native), candidate_sha256=digest(actual),
-                          raw_equal=native == actual, reviewed_plan_tables=0)
+                          raw_equal=native == actual, reviewed_plan_tables=0, reviewed_statistic_tables=0)
             expected = native
             # PostgreSQL supplies whole-file alternatives for optional features
             # (XML, compression, NUMA, platform collations). An exact match is
@@ -49,13 +52,18 @@ def audit(fixtures, reference, candidate, profiles, output):
             if profile_path.exists():
                 profile = json.loads(read(profile_path))
                 expected = apply(source, native, profile)
-                result.update(reviewed_plan_tables=len(profile["plans"]),
+                statistics = sum(p.get("kind") == "memory_context_absence" for p in profile["plans"])
+                result.update(reviewed_plan_tables=len(profile["plans"]) - statistics,
+                              reviewed_statistic_tables=statistics,
                               profile_sha256=digest(read(profile_path)))
-            comparison, diff = compare(source, expected, actual)
+            candidate_for_comparison, choice_proofs = compare_choices(source, native, actual)
+            comparison, diff = compare(source, expected, candidate_for_comparison)
+            comparison["scoped_choice_proofs"] = choice_proofs
             # An unparseable tail remains byte-exact in compare(); identical
             # conditional/psql output needs no SQL-order proof.
             result.update(passed=comparison["equal_after_permitted_order"],
                           permitted_row_permutations=len(comparison["permitted_order_changes"]),
+                          scoped_choice_proofs=len(choice_proofs),
                           refused=comparison["refused"])
             (output / f"{case}.json").write_text(json.dumps(comparison, indent=2) + "\n")
             (output / f"{case}.diff").write_text(diff, errors="surrogateescape")
@@ -84,6 +92,8 @@ def main():
                    Path(candidate["regression"]["directory"]) / "results", args.profiles, args.output)
     report.update(reference_report_sha256=digest(read(args.reference_report)),
                   candidate_report_sha256=digest(read(args.candidate_report)),
+                  diagnostic_policy_sha256=digest(read(DIAGNOSTIC_POLICY)),
+                  choice_policy_sha256=digest(read(CHOICE_POLICY)),
                   raw_candidate_verdict=candidate["passed"])
     (args.output / "summary.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({k: v for k, v in report.items() if k != "cases"}, indent=2))

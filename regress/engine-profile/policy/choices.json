@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "sources": {
+    "751524c62440aafba68d3021033f861779066fac3b9759acc67bc2753ec5e18f": {
+      "case": "create_index",
+      "expected_sha256": "c2e398f43026e8626049e239d5376dbb3a5c071219daf9a4c63d29966d3bbb0c",
+      "statements": {
+        "9d09a52cc668e689561cbcca075e05c46c82f842c1b27249c4d27fdc20214358": {
+          "kind": "infinite_point_distance",
+          "sql_line": 145,
+          "columns": [
+            "f1"
+          ],
+          "sql": "SELECT * FROM point_tbl ORDER BY f1 <-> '0,1';"
+        }
+      }
+    },
+    "19fa7d543e5b4ffec53fbd7fd4059fdd36de3872b7186b0ec795c05e601c79f5": {
+      "case": "geometry",
+      "expected_sha256": "7c95c995fc65df1214cb52f6a65b866f4cc0eec6a40d31894041577c4c29bb81",
+      "statements": {
+        "4c67c5e4c1eb660b5281f7a49e8f256fbf187426ec6a5fe252cd30fa235f926b": {
+          "kind": "circle_special_distance",
+          "sql_line": 403,
+          "columns": [
+            "circle",
+            "point",
+            "distance"
+          ],
+          "sql": "SELECT c1.f1 AS circle, p1.f1 AS point, (p1.f1 <-> c1.f1) AS distance\n   FROM CIRCLE_TBL c1, POINT_TBL p1\n   WHERE (p1.f1 <-> c1.f1) > 0\n   ORDER BY distance, area(c1.f1), p1.f1[0];"
+        }
+      }
+    },
+    "d206f2311c66a5235f719c347cb0b98f79a201cd359655b9eaa3cf18df37f5f7": {
+      "case": "tsrf",
+      "expected_sha256": "49573506a026727c3e6de0b53cb7d1122ccc5d6c17e319ba6b688560fd4de21c",
+      "statements": {
+        "94c52c09fa4d5aa9713937aa2e5babc9a82cbc4437f036a02d40d04f9ab239bc": {
+          "kind": "srf_distinct_representative",
+          "sql_line": 153,
+          "columns": [
+            "a",
+            "b",
+            "g"
+          ],
+          "sql": "SELECT DISTINCT ON (g) a, b, generate_series(1,3) g\nFROM (VALUES (3, 2), (3,1), (1,1), (1,4), (5,3), (5,1)) AS t(a, b);"
+        }
+      }
+    },
+    "74bb803ba8bc1a89fda3fe192c99c5df0e681c72c0babd2c4965317eb9d67ecf": {
+      "case": "sqljson",
+      "expected_sha256": "b5fa3a658ee97254d01a07216340e6482103347ab8d8a340ca7ef4d645b5c1d9",
+      "statements": {
+        "60706162ee8ec0a7014c8a99d00a700d7fb17ca01e17914fa1627540f5807fd5": {
+          "kind": "json_full_partition",
+          "sql_line": 251,
+          "columns": [
+            "bar",
+            "json_arrayagg"
+          ],
+          "sql": "SELECT\n\tbar, JSON_ARRAYAGG(bar) FILTER (WHERE bar > 2) OVER (PARTITION BY foo.bar % 2)\nFROM\n\t(VALUES (NULL), (3), (1), (NULL), (NULL), (5), (2), (4), (NULL), (5), (4)) foo(bar);"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "sources": {
+    "3442c4351cce0a18003c2b4e7cc4f777502179f56357776395b275e24756e125": {
+      "case": "subselect",
+      "reason": "Fixed EXPLAIN ANALYZE wrapper; only its masked plan text is returned.",
+      "definitions": {
+        "explain_sq_limit": "d3e83abbf24fe50cc15eb0f6b525e2f51924fa678c2d1809050b201edbad5f64"
+      },
+      "statements": {
+        "0bfbbe0e044445567ab257cec2b896fd63e90a3b1c3dadf283600de15815f6f2": {
+          "kind": "text_plan",
+          "header": "explain_sq_limit",
+          "helper": "explain_sq_limit",
+          "sql_line": 1064
+        }
+      }
+    },
+    "1013722d8b8484b47d9aed1d2c0fe9b5fffa6537f9973cfbf4efaf6932168510": {
+      "case": "memoize",
+      "reason": "EXPLAIN ANALYZE wrapper with upstream counter formatting; SQL query data is not returned by this helper.",
+      "definitions": {
+        "explain_memoize": "5892f2e100ef4209ffb27eb8d04e554da6283c12f21674bc8d5aa2ed795526e6"
+      },
+      "statements": {
+        "a5da7d903ddf55eccad9d5c4a16f666b0f80b28ec70882c02deee6c7f166d880": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 62
+        },
+        "d70d244509adf42e6ed4294c6a15c9575ae1e3bcbc749c50186dc06f3115bbea": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 118
+        },
+        "fa39a76f674a280784ac4197d890b3db8ceb9f64a24aecee844e64f1b13d7f23": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 143
+        },
+        "2b9a53cb59d95c2b725652ffda7ca0261ec7bbf764e64fb4a643b0b83d380998": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 147
+        },
+        "df50261e12e24ea720c073d4dbcbe17c5ad2653b4f460cb522887757b1022ce0": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 163
+        },
+        "622a49001764a12301558e155f9cd8e166ce74015ed120dceabcfdd8856fb94b": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 167
+        }
+      }
+    },
+    "22f4767e7e78811431e9f42a275b12394ec591c65562914c702fb96897395ec1": {
+      "case": "incremental_sort",
+      "reason": "Text or JSON projection of EXPLAIN ANALYZE incremental-sort nodes; invariant helper results remain strict.",
+      "definitions": {
+        "explain_analyze_without_memory": "52b47cea9cca3a3865c261d48aff1d864ae6abdce7084cd5c90fa4c278318347",
+        "explain_analyze_inc_sort_nodes": "077bb28ddee21d3a0fd227d86427475bdfd92f55e3063f1c6602619697da9a42",
+        "explain_analyze_inc_sort_nodes_without_memory": "dfd9a49add15d069d8cfe8fa273f70763d63f82f9b96593ecf8c367f310866b2"
+      },
+      "statements": {
+        "69b5ec797637faabcf26bdf0cab1b1e395aab64041cbe1a50d1f59de9424b876": {
+          "kind": "text_plan",
+          "header": "explain_analyze_without_memory",
+          "helper": "explain_analyze_without_memory",
+          "sql_line": 137
+        },
+        "3fe9a54b4dbbc81f5a11281dbe666b386212d1bafce79253c210b845aaaa7acc": {
+          "kind": "incremental_sort_json",
+          "header": "jsonb_pretty",
+          "helper": "explain_analyze_inc_sort_nodes_without_memory",
+          "sql_line": 138
+        },
+        "f551e12b9900a4a10478e772a73c67391e4e1b76f3b49d0583b5eaacb6beb7fc": {
+          "kind": "text_plan",
+          "header": "explain_analyze_without_memory",
+          "helper": "explain_analyze_without_memory",
+          "sql_line": 166
+        },
+        "6828401f2c5ad90c54a48aa79094123b10e8e9733a01a4e4b6ecbaedc92f366e": {
+          "kind": "incremental_sort_json",
+          "header": "jsonb_pretty",
+          "helper": "explain_analyze_inc_sort_nodes_without_memory",
+          "sql_line": 167
+        }
+      }
+    },
+    "8de1ed503a76fda6550881065cf33868437391561f086a15c68e8f0c2c8ece5a": {
+      "case": "sysviews",
+      "reason": "Inventory of one internal allocator used by PostgreSQL tuplesort. The engine does not create that context; cursor values and remaining view checks stay strict.",
+      "definitions": {},
+      "statements": {
+        "f0fe309f75171e3341c9ce164ecfda8e3a47c4704dae7853a5d8fc3174d614f2": {
+          "kind": "memory_context_absence",
+          "columns": [
+            "type",
+            "name",
+            "?column?",
+            "total_nblocks",
+            "?column?",
+            "free_chunks"
+          ],
+          "context": "Caller tuples",
+          "sql_line": 31
+        }
+      }
+    }
+  }
+}

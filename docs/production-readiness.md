@@ -7,7 +7,7 @@ Priority: reduce CPU cost first, while preserving correctness and latency. Memor
 | Gate | Required evidence | Current scope |
 | --- | --- | --- |
 | Build and dependencies | Reproducible locked Linux release build, vulnerability/license review, SBOM | Locked release build and clean RustSec audit; license review/SBOM and independent reproducibility pending |
-| SQL compatibility | PostgreSQL 18.6 regression and isolation suites, differential driver/application corpus | 88 differential checks and 510 engine-profile isolation cases pass; reviewed regression profile accepts 215/231 across two runs, with 16 unresolved cases; raw remains 203/231 |
+| SQL compatibility | PostgreSQL 18.6 regression and isolation suites, differential driver/application corpus | 88 differential checks and 510 engine-profile isolation cases pass; reviewed regression accepts 223/231, with eight unresolved cases; raw remains 203/231; ten additional diagnostic/data/permission checks pass per engine |
 | Durability | Repeated crashes during WAL, checkpoints, columnar compaction and DDL; committed-write verification | Ten whole-process kills preserve committed heap/columnar rows and reject uncommitted writes/DDL; compaction/I/O-fault campaigns pending |
 | Recovery operations | Restore verified backups; PITR; replica catch-up, failover and upgrade rehearsals | Native PG 18.6 logical dump/restore preserves data, access methods and grants; remaining operations pending |
 | Memory safety | Sanitizers, Miri where supported, concurrency models, allocator/JIT review and fuzzing | Upstream facilities exist; full fork campaigns pending |

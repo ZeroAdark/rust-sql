@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "reason": "The engine uses different cursor allocation paths and creates no Caller tuples context. Independent cursor, byte-accounting and view-permission checks pass on both engines.",
+  "source_sha256": "8de1ed503a76fda6550881065cf33868437391561f086a15c68e8f0c2c8ece5a",
+  "expected_sha256": "fe4a182d01003bd66fe696843298e94bdbba7c524cad9c97aabf7905de8b31c5",
+  "plans": [
+    {
+      "sql_sha256": "f0fe309f75171e3341c9ce164ecfda8e3a47c4704dae7853a5d8fc3174d614f2",
+      "occurrence": 1,
+      "sql_line": 31,
+      "kind": "memory_context_absence",
+      "before_sha256": "dddc16fcc4bf26c7c557173372fd7341b50f41a0a759f7e2aba6a279f1e1f735",
+      "after": " type | name | ?column? | total_nblocks | ?column? | free_chunks \n------+------+----------+---------------+----------+-------------\n(0 rows)\n"
+    }
+  ]
+}

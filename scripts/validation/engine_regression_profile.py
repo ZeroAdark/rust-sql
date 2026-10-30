@@ -3,7 +3,8 @@
 
 Profiles contain exact replacement plan tables, never regex masks. Recording is
 an explicit authoring operation; verification only reads committed profiles.
-Helper-function results, errors, notices and non-EXPLAIN tables stay untouched.
+Only the separately reviewed diagnostic policy can admit specific helper results
+or allocator observations. Other SQL values, errors and notices stay untouched.
 """
 import argparse
 from collections import Counter
@@ -11,7 +12,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from compare_regression import ORDER, compare, find_anchor, physical_lines, statements, table
+from compare_regression import ORDER, compare, find_anchor, physical_lines, statements
+from diagnostic_policy import bindings, display_table, guard_change
 
 
 def digest(text):
@@ -23,10 +25,11 @@ def read(path):
 
 
 def plan_tables(source, transcript):
-    """One forward pass over SQL echoes and complete aligned EXPLAIN tables."""
+    """One forward pass over SQL echoes and policy-bound diagnostic tables."""
     lines = physical_lines(transcript)
     original = physical_lines(transcript, keepends=True)
     position, occurrences, found = 0, Counter(), {}
+    helpers = bindings(source)
     for line, anchor, sql in statements(source):
         start = find_anchor(lines, anchor, position)
         if start is None:
@@ -35,28 +38,30 @@ def plan_tables(source, transcript):
         key = digest(sql)
         occurrences[key] += 1
         tokens = ORDER.lex(sql)
-        if not tokens or tokens[0] != ("w", "explain"):
+        direct = tokens and tokens[0] == ("w", "explain")
+        rule = {"kind": "text_plan", "header": "QUERY PLAN"} if direct else helpers.get(key)
+        if rule is None:
             continue
-        parsed = table(lines, position)
-        if parsed is None or lines[position].strip() != "QUERY PLAN":
+        parsed = display_table(lines, position, rule)
+        if parsed is None:
             continue
         end, rows = parsed
-        if "+" in lines[position + 1] or not all(row.startswith(" ") for row in rows):
-            continue
         found[(key, occurrences[key])] = {
             "start": position, "end": end + 1, "sql_line": line,
             "text": "".join(original[position:end + 1]),
+            "rule": rule, "rows": rows,
         }
         position = end + 1
     return found
 
 
-def validate_plan(text):
+def validate_plan(text, rule=None):
+    rule = rule or {"kind": "text_plan", "header": "QUERY PLAN"}
     lines = physical_lines(text)
-    parsed = table(lines, 0)
-    if (not parsed or parsed[0] != len(lines) - 1 or lines[0].strip() != "QUERY PLAN"
-            or "+" in lines[1] or not all(row.startswith(" ") for row in parsed[1])):
-        raise ValueError("replacement must be exactly one aligned EXPLAIN table")
+    parsed = display_table(lines, 0, rule)
+    if not parsed or parsed[0] != len(lines) - 1:
+        raise ValueError("replacement must be exactly one valid diagnostic table")
+    return parsed[1]
 
 
 def apply(source, expected, profile):
@@ -73,7 +78,10 @@ def apply(source, expected, profile):
         original = plans[key]
         if digest(original["text"]) != change["before_sha256"]:
             raise ValueError("original EXPLAIN table changed")
-        validate_plan(change["after"])
+        if change.get("kind", original["rule"]["kind"]) != original["rule"]["kind"]:
+            raise ValueError("profile cannot change the diagnostic policy")
+        rows = validate_plan(change["after"], original["rule"])
+        guard_change(original["rows"], rows, original["rule"])
         patches.append((original["start"], original["end"], change["after"]))
     lines, result, cursor = physical_lines(expected, keepends=True), [], 0
     for start, end, replacement in sorted(patches):
@@ -93,6 +101,7 @@ def propose(source, expected, actual, reason):
         if candidate is not None and candidate["text"] != original["text"]:
             profile["plans"].append({"sql_sha256": key[0], "occurrence": key[1],
                                      "sql_line": original["sql_line"],
+                                     "kind": original["rule"]["kind"],
                                      "before_sha256": digest(original["text"]),
                                      "after": candidate["text"]})
     check, diff = compare(source, apply(source, expected, profile), actual)
