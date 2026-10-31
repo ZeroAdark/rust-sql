@@ -1,0 +1,17 @@
+{
+  "source_parent": "fb73916ad1d5477fdfeef7d8b25c977249032b5e",
+  "source_files_restored": [
+    "crates/_support/pagepool/src/fallback.rs",
+    "crates/_support/pagepool/src/lib.rs",
+    "crates/_support/pagepool/src/os.rs",
+    "crates/_support/pagepool/src/os_miri.rs",
+    "crates/_support/pagepool/src/run.rs",
+    "crates/_support/pagepool/src/small.rs",
+    "crates/_support/pagepool/src/state.rs",
+    "crates/_support/pagepool/src/tests.rs"
+  ],
+  "source_hashes_verified_before_restore": true,
+  "retained_binary_sha256": "8e5bfc2b093055a5d2257dc817037a2b2f2906faf7c1b83e431f472a2f0513f0",
+  "target_binary_copied_from_retained_not_rebuilt": true,
+  "production_qualified": false
+}

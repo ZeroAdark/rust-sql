@@ -1,0 +1,5 @@
+{
+  "accepted": false,
+  "reason": "All five unthrottled connection pairs use more CPU; median CPU per accepted startup +24.9493%, peak memory -13.3269%. The first campaign is retained but invalid for performance because two trials have measured CPU throttling. No mixed-workload comparison was run for this variant.",
+  "qualified": false
+}
