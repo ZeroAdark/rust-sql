@@ -89,6 +89,8 @@ The [follow-up allocator-lock experiment](../artifacts/validation/small-superpag
 
 The [faster warm-page policy screens](../artifacts/validation/aged-warm-policy-screening-2026-10-30/README.md) also leave defaults unchanged. A 16 MiB warm-zero ceiling with 200 ms decay saves about 20% medium-load memory, but capacity update p99 rises 6.07%, failing preservation. The 100 ms alternative fails analytical-latency guards. All 60 trials pass correctness, restart and cleanup checks; the archive separately identifies the first capacity campaign rejected for timing validity and its complete valid repeat. This is performance screening, not production acceptance.
 
+The [recently used batch reserve prototype](../artifacts/validation/idle-batch-reserve-screening-2026-10-30/README.md) passes allocator and protocol checks but fails the medium read/aggregate/bundle latency guards. All three source files are restored. A separate 500 ms policy passes the medium guard but is not selected because its small memory saving accompanies worse read latency. The archive verifies all 35 trials and restoration; no capacity or connection qualification follows from these screens. The retained runtime and all four open PostgreSQL targets are unchanged.
+
 ## Deployment work still needed
 
 Use least-privilege service accounts, private network binding, authenticated clients, encrypted transport across trust boundaries, tested backups and externally enforced memory/CPU limits. Size active transactions from measured saturation, not maximum connection count. Apply existing `max_active_queries` and connection-queue controls to ordinary users; upstream exempts superusers from transaction admission, so benchmark with ordinary application roles too.

@@ -33,6 +33,7 @@ jobs:
       - run: python3 artifacts/validation/small-superpage-screening-2026-10-30/replay.py
       - run: python3 artifacts/validation/small-superpage-unlocked-screening-2026-10-30/replay.py
       - run: python3 artifacts/validation/aged-warm-policy-screening-2026-10-30/replay.py
+      - run: python3 artifacts/validation/idle-batch-reserve-screening-2026-10-30/replay.py
       - run: python3 -m unittest discover -s scripts/validation -p 'test_*.py'
       - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
