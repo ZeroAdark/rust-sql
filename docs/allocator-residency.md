@@ -54,3 +54,11 @@ million analytical rows, durable updates and a restart check. The report records
 kernel capability, binary/source hashes, effective allocator, SQL counters and
 kernel resource counters before and after the workload and restart. These checks
 qualify diagnostic behavior; performance qualification remains separate.
+
+The [subsequent local comparison](../artifacts/validation/residency-performance-2026-10-30/README.md)
+passes the provisional CPU/latency preservation guard at medium load across five
+alternating repetitions per engine. CPU per bundle changes +0.33%; the roughly
+1% memory difference does not establish a memory improvement. The entire capacity
+campaign is excluded from performance acceptance because one PostgreSQL trial
+recorded timed CPU throttling. Its correctness and restart checks still pass,
+and all observations remain in the replayable evidence.

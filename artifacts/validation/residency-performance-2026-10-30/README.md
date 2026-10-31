@@ -1,0 +1,13 @@
+# Allocator-residency accounting: local performance checks
+
+The published accounting fix (`d0c1cd2`) reports unavailable allocator residency honestly. It is not a memory optimization. The frozen candidate is `02cfbca6`; retained Rust baseline `8e5bfc2b`; PostgreSQL 18.6 `07b16e1a`. Exact binary hashes, source hashes, environment witnesses and settings are in the archive. This evidence does not include the later standby-handoff prototype.
+
+Two campaigns each contain five alternating repetitions of all three engines: one million fact rows, six ordinary-role clients, four server CPUs, two separate client CPUs, 2 GiB server limit, no swap, Hearth for both Rust arms, and no allocator tuning flags. Medium uses 30 timed bundles per client at 9.4 bundles/s; capacity uses 50 unpaced bundles. Both have 10 warmup bundles per client. Each bundle contains 12 reads, four committed updates and three analytical queries. Native PostgreSQL heap versus Rust columnar storage is an intentional difference.
+
+The medium campaign passed correctness, restart durability, resource validity and the provisional 5% CPU/latency preservation guard. Median CPU per bundle changed +0.33%, charged peak memory -1.26%, process PSS -1.16%, read p99 -1.90%, and update p99 -0.91%. These small differences do not establish a causal performance improvement. Rust still used more memory and had slower point-read/update p99 than PostgreSQL in this run.
+
+The entire capacity performance campaign is invalid: PostgreSQL repetition 3 recorded one timed CPU-throttling event (864 microseconds). All 15 trials completed and passed their SQL-result, restart and cleanup checks, but capacity values are retained only as diagnostic evidence. No trials were discarded to manufacture an accepted result. Setup and warmup CPU windows are recorded separately, including throttling outside the timed window.
+
+Across both campaigns: 136,800 timed statements, 34,200 warmup statements, 36,000 committed updates checked after restart, and 60 normal server shutdowns. Peak charged memory and PSS come from the kernel, independently of the SQL diagnostic counters being fixed. PSS sampling is every 500 ms; cgroup sampling every 50 ms; reported p99 is the median of trial p99 values. These short local WSL runs are not production or sustained-throughput qualification. All four requested performance gaps remain open. GitHub Actions was disabled throughout.
+
+Run `python3 replay.py` to verify every archived member and recompute the review without extracting or executing archived code. A deliberately altered restart count was rejected as a negative control. The archive includes all completed trials and the invalid-capacity marker.
