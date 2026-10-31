@@ -1,0 +1,42 @@
+{
+  "production_qualified": false,
+  "correctness_passed": true,
+  "binary_sha256": "2f35e3a361d2b660a73c5aefb739af6178ee3f4dfbd5b9b63f48b165e5d5ec3c",
+  "negative_unit_reproducer": {
+    "old_implementation_failed": true,
+    "left": 0,
+    "expected": 1
+  },
+  "connection_contract_checks": 12,
+  "connection_burst": {
+    "waves": 2,
+    "accepted_startups": 1600,
+    "intentional_overflow_rejections": 2,
+    "server_memory_limit_bytes": 4294967296,
+    "server_memory_peak_bytes": 2573369344,
+    "memory_limit_events": 0,
+    "oom_events": 0,
+    "swap_bytes": 0,
+    "cpu_throttling_events": 0,
+    "remaining_server_pids": [],
+    "performance_comparison": false
+  },
+  "lmgr_proc_unit_tests": 26,
+  "validation_unit_tests": 126,
+  "transaction_admission_checks": 52,
+  "differential_checks": 87,
+  "smoke_checks": 12,
+  "reviewed_regression": {
+    "accepted": 231,
+    "total": 231,
+    "passed": true
+  },
+  "raw_regression": {
+    "matched": 203,
+    "total": 231,
+    "passed": false
+  },
+  "isolation_cases": 510,
+  "crash_recovery_cycles": 10,
+  "logical_restore": true
+}

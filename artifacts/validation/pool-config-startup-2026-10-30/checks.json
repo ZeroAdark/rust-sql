@@ -1,0 +1,79 @@
+{
+  "passed": true,
+  "positive": [
+    {
+      "name": "pool-config-fixed-warm64-1",
+      "queries": 12,
+      "max_target_bytes": 67108864,
+      "expected_cap": 67108864,
+      "max_events": 4227
+    },
+    {
+      "name": "pool-config-fixed-warm64-2",
+      "queries": 12,
+      "max_target_bytes": 67108864,
+      "expected_cap": 67108864,
+      "max_events": 3548
+    },
+    {
+      "name": "pool-config-fixed-warm64-3",
+      "queries": 12,
+      "max_target_bytes": 67108864,
+      "expected_cap": 67108864,
+      "max_events": 2441
+    },
+    {
+      "name": "pool-config-fixed-no-prefault-1",
+      "queries": 12,
+      "max_target_bytes": 16777216,
+      "expected_cap": 16777216,
+      "max_events": 3728
+    },
+    {
+      "name": "pool-config-fixed-no-prefault-2",
+      "queries": 12,
+      "max_target_bytes": 16777216,
+      "expected_cap": 16777216,
+      "max_events": 3829
+    },
+    {
+      "name": "pool-config-fixed-no-prefault-3",
+      "queries": 12,
+      "max_target_bytes": 16777216,
+      "expected_cap": 16777216,
+      "max_events": 4015
+    }
+  ],
+  "negative": [
+    {
+      "name": "pool-warm-cap-warm64-1",
+      "rejected": true,
+      "reason": "('pool-warm-cap-warm64-1', 'warm target exceeded requested cap', 134217728, 67108864)"
+    },
+    {
+      "name": "pool-warm-cap-warm64-2",
+      "rejected": true,
+      "reason": "('pool-warm-cap-warm64-2', 'warm target exceeded requested cap', 268435456, 67108864)"
+    },
+    {
+      "name": "pool-warm-cap-warm64-3",
+      "rejected": true,
+      "reason": "('pool-warm-cap-warm64-3', 'warm target exceeded requested cap', 268435456, 67108864)"
+    },
+    {
+      "name": "pool-warm-cap-no-prefault-1",
+      "rejected": true,
+      "reason": "('pool-warm-cap-no-prefault-1', 'warm target exceeded requested cap', 268435456, 16777216)"
+    },
+    {
+      "name": "pool-warm-cap-no-prefault-2",
+      "rejected": true,
+      "reason": "('pool-warm-cap-no-prefault-2', 'warm target exceeded requested cap', 268435456, 16777216)"
+    },
+    {
+      "name": "pool-warm-cap-no-prefault-3",
+      "rejected": true,
+      "reason": "('pool-warm-cap-no-prefault-3', 'warm target exceeded requested cap', 268435456, 16777216)"
+    }
+  ]
+}

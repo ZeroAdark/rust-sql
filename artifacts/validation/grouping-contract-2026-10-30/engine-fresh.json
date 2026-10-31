@@ -1,0 +1,20 @@
+{
+  "passed": false,
+  "total": 231,
+  "accepted": 224,
+  "unresolved": [
+    "aggregates",
+    "join_hash",
+    "merge",
+    "select_parallel",
+    "window",
+    "partition_prune",
+    "explain"
+  ],
+  "reference_report_sha256": "1201bde6398bcd27ca846f9438701314543da066eb6e04fb4b17ec00b6c44e99",
+  "candidate_report_sha256": "80228e51d27540705eaf0cb739fcce77f08824bb10782b5585e79071e7403b4f",
+  "diagnostic_policy_sha256": "a9e899058418cf8a7cc89be0236f54c94eea662596a10a6ec306de57dcf84293",
+  "choice_policy_sha256": "658724128e4a06246bd630b44d13ef8ccbe3da82918f5918a2af16cb666dad0b",
+  "raw_candidate_verdict": false,
+  "full_audit_archive_member": "audits/fresh/summary.json"
+}

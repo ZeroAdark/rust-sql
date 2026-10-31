@@ -1,0 +1,30 @@
+{
+  "cluster": "/home/rustsql/compat/rust-sql-smoke-j_2wu4oh",
+  "checks": [
+    "durability_settings",
+    "heap_aggregate",
+    "rollback",
+    "savepoint",
+    "plan_invalidation",
+    "columnar_aggregate",
+    "columnar_rollback",
+    "columnar_writes",
+    "concurrent_committed_updates",
+    "clean_restart",
+    "acknowledged_commit_survives_kill",
+    "columnar_survives_restart"
+  ],
+  "passed": false,
+  "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build bbd3374) on x86_64-unknown-linux-gnu, 64-bit",
+  "regression": {
+    "returncode": 1,
+    "directory": "/home/rustsql/compat/rust-sql-smoke-j_2wu4oh/regression",
+    "profile": "postgresql-raw"
+  },
+  "isolation": {
+    "returncode": 0,
+    "directory": "/home/rustsql/compat/rust-sql-smoke-j_2wu4oh/isolation",
+    "profile": "engine-overlay"
+  },
+  "error": "PostgreSQL suites failed: see logs in /home/rustsql/compat/rust-sql-smoke-j_2wu4oh"
+}

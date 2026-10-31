@@ -175,7 +175,7 @@ adt_jsonb = { path = "../../backend/utils/adt/jsonb" }
 postgres_seams = { path = "../../backend/tcop/postgres_seams" }
 wchar = { path = "../../common/wchar" }
 memchr = "2"
-zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off
+zstd.workspace = true
 gravity_parallel = { path = "../parallel" }
 test_boot = { path = "../../_support/test_boot" }
 seam_core = { path = "../../_support/seam_core" }

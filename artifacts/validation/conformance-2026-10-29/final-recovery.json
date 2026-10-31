@@ -1,0 +1,46 @@
+{
+  "passed": true,
+  "checks": [
+    "whole_process_crash_1",
+    "whole_process_crash_2",
+    "whole_process_crash_3",
+    "whole_process_crash_4",
+    "whole_process_crash_5",
+    "whole_process_crash_6",
+    "whole_process_crash_7",
+    "whole_process_crash_8",
+    "whole_process_crash_9",
+    "whole_process_crash_10",
+    "ordinary_role_and_timeout_recovery",
+    "logical_restore_rows_storage_methods_and_acl"
+  ],
+  "cgroup_before": {
+    "memory.max": "max",
+    "memory.peak": "828669952",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+    "memory.swap.max": "max",
+    "cpu.max": "max 100000",
+    "cpu.stat": "usage_usec 24558180\nuser_usec 13544517\nsystem_usec 11013663\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0"
+  },
+  "source": "/home/rustsql/conformance/compat-3cmh4d0d",
+  "restored": "/home/rustsql/conformance/compat-zxg1gb_8",
+  "data": {
+    "heap_ledger": {
+      "rows": 968,
+      "sha256": "25d86ca04c85bd9b0bbbd322a0c50c159a8d63e860a755c418b8a2267dd53ed3"
+    },
+    "col_ledger": {
+      "rows": 968,
+      "sha256": "25d86ca04c85bd9b0bbbd322a0c50c159a8d63e860a755c418b8a2267dd53ed3"
+    }
+  },
+  "backup_sha256": "db2341ac012c3d561c79fb01af575ec8af5652494984902b531d9314b61ae356",
+  "cgroup_after": {
+    "memory.max": "max",
+    "memory.peak": "1160753152",
+    "memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0",
+    "memory.swap.max": "max",
+    "cpu.max": "max 100000",
+    "cpu.stat": "usage_usec 27273843\nuser_usec 14869709\nsystem_usec 12404133\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0\nnr_bursts 0\nburst_usec 0"
+  }
+}

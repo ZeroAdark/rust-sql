@@ -220,7 +220,7 @@ pub fn PreCommit_Inval() -> PgResult<()> {
         crate::invalidate::CacheInvalidateRelcacheAll()?;
     } else {
         for &relid in relcache_seams::support_family_relids::call(cx.mcx(), &families)?.iter() {
-            crate::invalidate::CacheInvalidateRelcacheByRelid(relid)?;
+            crate::invalidate::cache_invalidate_relcache_by_relid_if_exists(relid)?;
         }
     }
     with_state(|state| state.support_families.clear());

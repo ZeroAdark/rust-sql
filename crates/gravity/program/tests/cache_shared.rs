@@ -174,6 +174,42 @@ fn reset_empties() {
     c.reset();
     assert!(c.get(1).is_none());
     assert_eq!(c.stats().entries, 0);
+    assert_eq!(c.stats().bytes, 0);
+}
+
+#[test]
+fn byte_accounting_survives_replacement_removal_and_refusal() {
+    let c = SharedCache::new(SHARDS * 4, SHARDS * 100);
+    let ks = same_shard_keys(4);
+    c.insert(ks[0], 1, 40);
+    c.insert(ks[1], 2, 30);
+    assert_eq!(c.insert_over(ks[0], 3, 60, |_| false), (3, true));
+    assert_eq!(c.stats().bytes, 90);
+    assert_eq!(c.remove_where::<1>(|v| *v == 2, |_| {}), 1);
+    assert_eq!(c.stats().bytes, 60);
+    assert_eq!(c.insert_over(ks[0], 4, 101, |_| false), (4, false));
+    assert_eq!((c.stats().entries, c.stats().bytes), (0, 0));
+    c.insert(ks[2], 5, 100);
+    c.reset();
+    c.insert(ks[3], 6, 100);
+    assert_eq!((c.stats().entries, c.stats().bytes), (1, 100));
+}
+
+#[test]
+fn small_and_zero_global_limits_are_hard_bounds() {
+    for (entries, bytes) in [(0, 100), (100, 0), (1, 100), (7, 19), (17, 23)] {
+        let c = SharedCache::new(entries, bytes);
+        for k in 0..1000u128 { c.insert(k, k, 1); }
+        let stats = c.stats();
+        assert!(stats.entries <= entries && stats.bytes <= bytes);
+        if entries == 0 || bytes == 0 { assert_eq!(stats.entries, 0); }
+    }
+}
+
+#[test]
+#[should_panic(expected = "nonzero pass size")]
+fn zero_removal_batch_is_rejected_explicitly() {
+    SharedCache::<u8>::new(100, 100).remove_where::<0>(|_| true, |_| {});
 }
 
 /// C2: a program the tier files moves its arena's bytes onto the program caches' memory account once (a second filing

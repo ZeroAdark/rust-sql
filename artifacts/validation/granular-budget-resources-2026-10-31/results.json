@@ -1,0 +1,95 @@
+{
+  "evidence_valid": true,
+  "candidate_sha256": "635ec740b3cd85c4318eadc87843705032494a49d92d1deeb79b09a8c5ab9e57",
+  "production_qualified": false,
+  "connection_trials": 10,
+  "accepted_startups": 16000,
+  "overflow_rejections": 20,
+  "startup_cpu_change_percent": -10.225924587312152,
+  "startup_cpu_including_shutdown_change_percent": -8.63097292772219,
+  "startup_peak_change_percent": -0.9009416422965266,
+  "additional_2g_pilots": 3,
+  "pilot_accepted_startups": 4800,
+  "pilot_headroom_mib": [
+    530.078125,
+    573.59765625,
+    487.109375
+  ],
+  "positive_budget_trials": 12,
+  "successful_sorts": 144,
+  "full_restart_checks": 12,
+  "positive_budget_peaks": [
+    {
+      "memory_mib": 2048,
+      "session": "fresh",
+      "engine": "postgresql",
+      "peak_mib": 691.1953125
+    },
+    {
+      "memory_mib": 2048,
+      "session": "fresh",
+      "engine": "rustsql",
+      "peak_mib": 1197.70703125
+    },
+    {
+      "memory_mib": 2048,
+      "session": "loader",
+      "engine": "postgresql",
+      "peak_mib": 690.82421875
+    },
+    {
+      "memory_mib": 2048,
+      "session": "loader",
+      "engine": "rustsql",
+      "peak_mib": 1233.08203125
+    },
+    {
+      "memory_mib": 4096,
+      "session": "fresh",
+      "engine": "rustsql",
+      "peak_mib": 1250.55078125
+    },
+    {
+      "memory_mib": 4096,
+      "session": "fresh",
+      "engine": "postgresql",
+      "peak_mib": 690.91796875
+    },
+    {
+      "memory_mib": 4096,
+      "session": "loader",
+      "engine": "rustsql",
+      "peak_mib": 1243.25
+    },
+    {
+      "memory_mib": 4096,
+      "session": "loader",
+      "engine": "postgresql",
+      "peak_mib": 690.59765625
+    },
+    {
+      "memory_mib": 8192,
+      "session": "fresh",
+      "engine": "postgresql",
+      "peak_mib": 690.86328125
+    },
+    {
+      "memory_mib": 8192,
+      "session": "fresh",
+      "engine": "rustsql",
+      "peak_mib": 1242.35546875
+    },
+    {
+      "memory_mib": 8192,
+      "session": "loader",
+      "engine": "postgresql",
+      "peak_mib": 690.63671875
+    },
+    {
+      "memory_mib": 8192,
+      "session": "loader",
+      "engine": "rustsql",
+      "peak_mib": 1243.03125
+    }
+  ]
+}

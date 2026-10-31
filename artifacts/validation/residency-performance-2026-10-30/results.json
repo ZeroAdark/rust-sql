@@ -1,0 +1,281 @@
+{
+  "residency-medium-20261030": {
+    "timed_performance_valid": true,
+    "invalid_timed_trials": {},
+    "timed": {
+      "phase": "medium",
+      "trials": 15,
+      "engines": {
+        "postgresql": {
+          "cpu_ms_per_bundle": 238.70809444444444,
+          "sql_per_second": 178.75071676299976,
+          "charged_peak_mib": 223.9375,
+          "pss_peak_mib": 92.8662109375,
+          "read_p99_ms": 0.45234,
+          "update_p99_ms": 1.234826,
+          "aggregate_p99_ms": 36.351694,
+          "range_p99_ms": 16.349655,
+          "join_p99_ms": 51.052572,
+          "bundle_p99_ms": 107.032051
+        },
+        "rustsql-baseline": {
+          "cpu_ms_per_bundle": 19.798655555555555,
+          "sql_per_second": 179.41801819546205,
+          "charged_peak_mib": 485.69140625,
+          "pss_peak_mib": 512.6962890625,
+          "read_p99_ms": 0.653438,
+          "update_p99_ms": 1.484313,
+          "aggregate_p99_ms": 5.52205,
+          "range_p99_ms": 1.472488,
+          "join_p99_ms": 7.17731,
+          "bundle_p99_ms": 20.782915
+        },
+        "rustsql": {
+          "cpu_ms_per_bundle": 19.863255555555554,
+          "sql_per_second": 179.40279936310307,
+          "charged_peak_mib": 479.59375,
+          "pss_peak_mib": 506.75,
+          "read_p99_ms": 0.641014,
+          "update_p99_ms": 1.470868,
+          "aggregate_p99_ms": 5.396359,
+          "range_p99_ms": 1.379028,
+          "join_p99_ms": 6.653564,
+          "bundle_p99_ms": 20.0708
+        }
+      },
+      "candidate_change_percent": {
+        "cpu_ms_per_bundle": 0.3262847814020864,
+        "sql_per_second": -0.008482332216153132,
+        "charged_peak_mib": -1.2554589542935757,
+        "pss_peak_mib": -1.1598073146527388,
+        "read_p99_ms": -1.9013280525466802,
+        "update_p99_ms": -0.9058062551496882,
+        "aggregate_p99_ms": -2.276165554458942,
+        "range_p99_ms": -6.347080587413966,
+        "join_p99_ms": -7.297246461417995,
+        "bundle_p99_ms": -3.4264442692471198
+      },
+      "preservation_failures": []
+    },
+    "warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        4735786,
+        4497134,
+        4941095,
+        4747765,
+        4911986
+      ],
+      "candidate_cpu_us": [
+        4803059,
+        4591163,
+        4765501,
+        4907308,
+        5040290
+      ],
+      "median_change_pct": 1.1646322006249266,
+      "paired_change_pct": [
+        1.4205244916049908,
+        2.0908649820085445,
+        -3.5537466897519687,
+        3.3603811477610934,
+        2.6120595620590104
+      ],
+      "throttled_trials": [
+        {
+          "engine": "postgresql",
+          "repetition": 1,
+          "nr_throttled": 13,
+          "throttled_usec": 21180
+        },
+        {
+          "engine": "postgresql",
+          "repetition": 2,
+          "nr_throttled": 13,
+          "throttled_usec": 23348
+        },
+        {
+          "engine": "postgresql",
+          "repetition": 3,
+          "nr_throttled": 8,
+          "throttled_usec": 10761
+        }
+      ],
+      "rust_comparison_valid": true
+    },
+    "setup_warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        5386878,
+        5130228,
+        5613989,
+        5426412,
+        5615865
+      ],
+      "candidate_cpu_us": [
+        5401146,
+        5248632,
+        5322570,
+        5605089,
+        5743099
+      ],
+      "median_change_pct": -0.46561153115539655,
+      "paired_change_pct": [
+        0.2648658462285569,
+        2.3079675991008575,
+        -5.190943551902216,
+        3.292728233683695,
+        2.2656171400131653
+      ],
+      "throttled_trials": [
+        {
+          "engine": "postgresql",
+          "repetition": 1,
+          "nr_throttled": 13,
+          "throttled_usec": 21180
+        },
+        {
+          "engine": "postgresql",
+          "repetition": 2,
+          "nr_throttled": 13,
+          "throttled_usec": 23348
+        },
+        {
+          "engine": "postgresql",
+          "repetition": 3,
+          "nr_throttled": 8,
+          "throttled_usec": 10761
+        }
+      ],
+      "rust_comparison_valid": true
+    }
+  },
+  "residency-capacity-20261030": {
+    "timed_performance_valid": false,
+    "invalid_timed_trials": {
+      "capacity-postgresql-3.json": [
+        1,
+        864
+      ]
+    },
+    "timed": {
+      "phase": "capacity",
+      "trials": 15,
+      "engines": {
+        "postgresql": {
+          "cpu_ms_per_bundle": 209.97594333333333,
+          "sql_per_second": 331.21315575921295,
+          "charged_peak_mib": 232.765625,
+          "pss_peak_mib": 100.3681640625,
+          "read_p99_ms": 5.934185,
+          "update_p99_ms": 9.796731,
+          "aggregate_p99_ms": 222.565337,
+          "range_p99_ms": 92.579949,
+          "join_p99_ms": 380.421574,
+          "bundle_p99_ms": 646.716391
+        },
+        "rustsql-baseline": {
+          "cpu_ms_per_bundle": 17.752786666666665,
+          "sql_per_second": 3589.865432004878,
+          "charged_peak_mib": 491.828125,
+          "pss_peak_mib": 514.923828125,
+          "read_p99_ms": 4.761911,
+          "update_p99_ms": 7.627303,
+          "aggregate_p99_ms": 13.610523,
+          "range_p99_ms": 5.882466,
+          "join_p99_ms": 18.797557,
+          "bundle_p99_ms": 46.914987
+        },
+        "rustsql": {
+          "cpu_ms_per_bundle": 16.703396666666666,
+          "sql_per_second": 3734.9488735429586,
+          "charged_peak_mib": 481.4453125,
+          "pss_peak_mib": 505.37109375,
+          "read_p99_ms": 4.591418,
+          "update_p99_ms": 7.399475,
+          "aggregate_p99_ms": 13.747361,
+          "range_p99_ms": 6.099258,
+          "join_p99_ms": 17.6894,
+          "bundle_p99_ms": 44.139722
+        }
+      },
+      "candidate_change_percent": {
+        "cpu_ms_per_bundle": -5.911128318633918,
+        "sql_per_second": 4.041472982374539,
+        "charged_peak_mib": -2.1110652222257498,
+        "pss_peak_mib": -1.8551742710731678,
+        "read_p99_ms": -3.5803483097437083,
+        "update_p99_ms": -2.987006022967764,
+        "aggregate_p99_ms": 1.0053838489527456,
+        "range_p99_ms": 3.6853931667433226,
+        "join_p99_ms": -5.895218192449169,
+        "bundle_p99_ms": -5.915519064302421
+      },
+      "preservation_failures": []
+    },
+    "warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        6484471,
+        6832466,
+        5897319,
+        5969423,
+        6826538
+      ],
+      "candidate_cpu_us": [
+        6177346,
+        6079971,
+        5737857,
+        6042662,
+        6436929
+      ],
+      "median_change_pct": -6.2379799369910005,
+      "paired_change_pct": [
+        -4.736315421874815,
+        -11.013519862374732,
+        -2.7039744670417143,
+        1.2269024996218292,
+        -5.707270654612929
+      ],
+      "throttled_trials": [
+        {
+          "engine": "postgresql",
+          "repetition": 3,
+          "nr_throttled": 1,
+          "throttled_usec": 864
+        }
+      ],
+      "rust_comparison_valid": true
+    },
+    "setup_warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        7161512,
+        7496829,
+        6506184,
+        6531836,
+        7499611
+      ],
+      "candidate_cpu_us": [
+        6817148,
+        6731367,
+        6323697,
+        6617973,
+        7098070
+      ],
+      "median_change_pct": -6.006343353191335,
+      "paired_change_pct": [
+        -4.808537638420485,
+        -10.210476989671236,
+        -2.8048238414406956,
+        1.318725699787926,
+        -5.354157702312823
+      ],
+      "throttled_trials": [
+        {
+          "engine": "postgresql",
+          "repetition": 3,
+          "nr_throttled": 1,
+          "throttled_usec": 864
+        }
+      ],
+      "rust_comparison_valid": true
+    }
+  }
+}

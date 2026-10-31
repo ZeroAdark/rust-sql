@@ -1,0 +1,197 @@
+name: Linux validation
+on:
+  push:
+    branches: [main, 'hardening/**']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_server:
+        description: Build the complete server and run disposable-cluster recovery checks
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo test --locked -j 2 -p gravity_program -p pgsync -p lmgr_proc
+      - run: cargo test --locked --release -j 2 -p pagepool --features global --test frames --test idle_handoff --test idle_fallback
+      - run: python3 -m py_compile scripts/validation/*.py
+      - run: python3 artifacts/validation/pressure-correctness-2026-10-30/replay.py
+      - run: python3 artifacts/validation/postgresql-comparison-2026-10-30/replay.py
+      - run: python3 artifacts/validation/postgresql-warm-reserve-2026-10-30/replay.py
+      - run: python3 artifacts/validation/allocator-retention-screening-2026-10-30/replay.py
+      - run: python3 artifacts/validation/bounded-small-refill-2026-10-30/replay.py
+      - run: python3 artifacts/validation/portal-memory-screening-2026-10-30/replay.py
+      - run: python3 artifacts/validation/small-superpage-screening-2026-10-30/replay.py
+      - run: python3 artifacts/validation/small-superpage-unlocked-screening-2026-10-30/replay.py
+      - run: python3 artifacts/validation/aged-warm-policy-screening-2026-10-30/replay.py
+      - run: python3 artifacts/validation/idle-batch-reserve-screening-2026-10-30/replay.py
+      - run: python3 -m unittest discover -s scripts/validation -p 'test_*.py'
+      - run: cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cache-pressure
+          path: cache-pressure.csv
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo install cargo-audit --version 0.22.2 --locked -j 2
+      - run: cargo audit --deny warnings --json > dependency-audit.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dependency-audit
+          path: dependency-audit.json
+  server:
+    # Run the full server once per branch push; PR events retain the faster checks.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.full_server)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libre2-dev clang lld libssl-dev libicu-dev postgresql-client python3-psycopg bison flex zlib1g-dev locales
+      - run: sudo localedef -i en_US -f UTF-8 en_US.UTF-8
+      - run: rustup toolchain install 1.96.0 --profile minimal
+      - run: cargo build --locked --release -j 2 -p main_main -p initdb
+      - run: cargo test --locked --release -j 2 -p main_main --bin postgres allocator_constructor_honors_warm_limit_and_host_age
+      - run: cargo test --locked --release -j 2 -p gravity_lowerv4 --lib
+      - run: cargo test --locked --release -j 2 -p inval --lib
+      - run: cargo test --locked --release -j 2 -p portalmem -p types_portal --lib
+      - run: 'cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::'
+      - run: cargo test --locked --release -j 2 -p compression -p basebackup_compress -p pgrc_codec -p xlogreader -p xloginsert -p parquet_read --lib
+      - run: cargo test --locked --release -j 2 -p gravity_wasm --test gravity_wasm_suite
+      - name: Build the pinned PostgreSQL reference separately
+        run: |
+          cp -a crates/postgres-18.6-reference "$RUNNER_TEMP/postgres-reference"
+          cd "$RUNNER_TEMP/postgres-reference"
+          ./configure --prefix="$RUNNER_TEMP/postgres18" --without-readline
+          make -j 2
+          make install
+          make -C src/test/regress all
+          make -C src/test/isolation all
+      - name: Differential SQL and whole-process crash/restore checks
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/compatibility_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" --output artifacts/compatibility.json
+          python3 scripts/validation/bind_lifecycle_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/bind-lifecycle.json
+          python3 scripts/validation/explain_contract.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/explain-contract.json
+          python3 scripts/validation/admission_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/admission.json
+          python3 scripts/validation/connection_queue_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/connection-queue.json
+          python3 scripts/validation/idle_allocator_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/idle-allocator.json
+          python3 scripts/validation/choice_contract.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/choice-contract.json
+          python3 scripts/validation/diagnostics_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/diagnostics-contract.json
+          python3 scripts/validation/grouping_contract.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/grouping-contract.json
+          python3 scripts/validation/filtered_diagnostics_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/filtered-diagnostics.json
+          python3 scripts/validation/hash_diagnostics_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/hash-diagnostics.json
+          python3 scripts/validation/aggregate_strategy_probe.py --candidate-bin target/release \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/aggregate-strategy.json
+          python3 scripts/validation/aggregate_validity_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/aggregate-validity.json
+          python3 scripts/validation/parallel_contract_probe.py --candidate-bin target/release \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/parallel-contract.json
+          python3 scripts/validation/merge_contract_probe.py --candidate-bin target/release \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/merge-contract.json
+          python3 scripts/validation/window_trace_probe.py --candidate-bin target/release \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/window-trace.json
+          python3 scripts/validation/catalog_churn_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/catalog-churn.json
+          python3 scripts/validation/recovery_probe.py --candidate target/release \
+            --reference-clients "$RUNNER_TEMP/postgres18/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --output artifacts/recovery.json --cycles 10
+      - name: Server authentication, TLS and certificate rotation
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/auth_tls_probe.py --candidate target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/auth-tls.json
+      - run: |
+          ulimit -s 65520
+          python3 scripts/validation/server_smoke.py --bin-dir target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/server-smoke.json \
+            --isolation-dir "$RUNNER_TEMP/postgres-reference/src/test/isolation" \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin" --isolation-overlay regress/isolation-overlay
+      # Retain the raw verdict. Only a completed capture may reach the required
+      # source-bound engine audit; smoke/runner errors still fail this step.
+      - name: Native PostgreSQL regression control
+        run: |
+          python3 scripts/validation/reference_regression.py --reference "$RUNNER_TEMP/postgres18/bin" \
+            --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/native-regression.json
+      - name: Capture strict PostgreSQL regression expectations
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/server_smoke.py --bin-dir target/release \
+            --work-dir "$RUNNER_TEMP/rustsql-checks" --output artifacts/postgres-raw.json \
+            --capture-regression \
+            --regression-dir "$RUNNER_TEMP/postgres-reference/src/test/regress" \
+            --reference-bin "$RUNNER_TEMP/postgres18/bin"
+      - name: Reviewed engine regression contract
+        if: always()
+        run: |
+          python3 scripts/validation/engine_regression_audit.py \
+            --fixtures crates/postgres-18.6-reference/src/test/regress \
+            --reference-report artifacts/native-regression.json \
+            --candidate-report artifacts/postgres-raw.json --output artifacts/engine-contract
+      - name: Build separately patched PostgreSQL window control
+        if: always()
+        run: |
+          cp -a crates/postgres-18.6-reference "$RUNNER_TEMP/postgres-window-reference"
+          cd "$RUNNER_TEMP/postgres-window-reference"
+          patch --batch --fuzz=0 -p1 < "$GITHUB_WORKSPACE/patches/postgresql/exclude-ties-v4.patch"
+          ./configure --prefix="$RUNNER_TEMP/postgres18-window-fixed" --without-readline
+          make -j 2
+          make install
+      - name: Independent window-frame oracle against declared upstream fix
+        if: always()
+        run: |
+          ulimit -s 65520
+          python3 scripts/validation/window_peer_probe.py --candidate target/release \
+            --reference "$RUNNER_TEMP/postgres18-window-fixed/bin" --work-dir "$RUNNER_TEMP/rustsql-checks" \
+            --reference-patch patches/postgresql/exclude-ties-v4.patch \
+            --output artifacts/window-peer.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: server-smoke
+          path: |
+            artifacts/*.json
+            artifacts/engine-contract/**
+            ${{ runner.temp }}/rustsql-checks/*/server.log
+            ${{ runner.temp }}/rustsql-checks/*/initdb.log
+            ${{ runner.temp }}/rustsql-checks/*/regression/regression.*
+            ${{ runner.temp }}/rustsql-checks/*/isolation/regression.*
+            ${{ runner.temp }}/rustsql-checks/*/isolation.log

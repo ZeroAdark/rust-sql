@@ -52,8 +52,10 @@ pub struct CacheStats {
 }
 
 struct L2Entry {
+    key: ContentKey,
     program: Arc<Program>,
-    last_use: u64,
+    prev: usize,
+    next: usize,
     /// D2948: the code bytes `l2_bytes` counted when the entry was filed: a tier-0 program's code grows when it is promoted
     /// (`Code::bytes`), and subtracting its later size at eviction underflowed the count (a debug panic; in a release build
     /// a near-2^64 `l2_bytes`, after which every filing evicted the whole L2).
@@ -62,19 +64,23 @@ struct L2Entry {
 
 pub struct ProgramCache {
     l1: HashMap<PlanKey, Arc<Program>>,
-    l2: HashMap<ContentKey, L2Entry>,
-    clock: u64,
+    l2: HashMap<ContentKey, usize>,
+    entries: Vec<L2Entry>,
+    oldest: usize,
+    newest: usize,
     l2_bytes: usize,
     budget_bytes: usize,
     max_entries: usize,
     stats: CacheStats,
 }
 
+const NO_ENTRY: usize = usize::MAX;
+
 impl ProgramCache {
     /// D3620: the tables grow with their filings (up to `max_entries`): a backend level that files one program holds one
     /// entry's table, not `max_entries`' (every level of a deep SQL-function recursion builds its own cache).
     pub fn new(budget_bytes: usize, max_entries: usize) -> ProgramCache {
-        ProgramCache { l1: HashMap::new(), l2: HashMap::new(), clock: 0, l2_bytes: 0, budget_bytes, max_entries, stats: CacheStats::default() }
+        ProgramCache { l1: HashMap::new(), l2: HashMap::new(), entries: Vec::new(), oldest: NO_ENTRY, newest: NO_ENTRY, l2_bytes: 0, budget_bytes, max_entries, stats: CacheStats::default() }
     }
 
     pub fn l1(&mut self, key: PlanKey) -> Option<Arc<Program>> {
@@ -86,12 +92,11 @@ impl ProgramCache {
     }
 
     pub fn l2(&mut self, key: ContentKey) -> Option<Arc<Program>> {
-        self.clock += 1;
-        match self.l2.get_mut(&key) {
-            Some(e) => {
-                e.last_use = self.clock;
+        match self.l2.get(&key).copied() {
+            Some(i) => {
+                self.touch(i);
                 self.stats.l2_hits += 1;
-                Some(e.program.clone())
+                Some(self.entries[i].program.clone())
             }
             None => {
                 self.stats.misses += 1;
@@ -105,38 +110,80 @@ impl ProgramCache {
             self.l1.insert(k, program.clone());
         }
         let content = program.key;
-        if let Some(e) = self.l2.get_mut(&content) {
-            e.last_use = self.clock;
+        if let Some(i) = self.l2.get(&content).copied() {
+            self.touch(i);
             return;
         }
-        let bytes = program.code_bytes();
-        while !self.l2.is_empty() && (self.l2.len() >= self.max_entries || self.l2_bytes + bytes > self.budget_bytes) {
-            self.evict_one();
-        }
-        self.clock += 1;
-        self.l2_bytes += bytes;
-        self.l2.insert(content, L2Entry { program, last_use: self.clock, bytes });
+        self.file(content, program);
     }
 
     /// File `program` under a front key (`Program::front_key`): a later `l2(front)` returns it. The
     /// entry is an L2 entry like any other (budget, eviction, `reset`).
     pub fn install(&mut self, front: ContentKey, program: Arc<Program>) {
+        // Credit the replaced entry before making room. Never serve an old front after replacement,
+        // including when its replacement is too large to cache.
+        if let Some(i) = self.l2.get(&front).copied() {
+            self.remove(i);
+        }
+        self.file(front, program);
+    }
+
+    fn file(&mut self, key: ContentKey, program: Arc<Program>) {
         let bytes = program.code_bytes();
-        while !self.l2.is_empty() && (self.l2.len() >= self.max_entries || self.l2_bytes + bytes > self.budget_bytes) {
+        // An uncacheable program must not flush useful entries or exceed the L2 admission budget.
+        // L1 plan ownership and code promoted after filing are accounted separately, as upstream.
+        if self.max_entries == 0 || self.budget_bytes == 0 || bytes > self.budget_bytes {
+            return;
+        }
+        while self.l2.len() >= self.max_entries || self.l2_bytes > self.budget_bytes - bytes {
             self.evict_one();
         }
-        self.clock += 1;
-        if let Some(old) = self.l2.insert(front, L2Entry { program, last_use: self.clock, bytes }) {
-            self.l2_bytes -= old.bytes;
+        let i = self.entries.len();
+        self.entries.push(L2Entry { key, program, prev: self.newest, next: NO_ENTRY, bytes });
+        if self.newest != NO_ENTRY {
+            self.entries[self.newest].next = i;
+        } else {
+            self.oldest = i;
         }
+        self.newest = i;
+        self.l2.insert(key, i);
         self.l2_bytes += bytes;
     }
 
+    // Dense, index-linked LRU: one hash lookup per hit, no hit allocation, and no cache scan on
+    // eviction. Indices survive Vec growth; swap removal repairs only the moved entry's neighbors.
+    fn unlink(&mut self, i: usize) {
+        let (prev, next) = (self.entries[i].prev, self.entries[i].next);
+        if prev == NO_ENTRY { self.oldest = next; } else { self.entries[prev].next = next; }
+        if next == NO_ENTRY { self.newest = prev; } else { self.entries[next].prev = prev; }
+    }
+
+    fn touch(&mut self, i: usize) {
+        if self.newest == i { return; }
+        self.unlink(i);
+        self.entries[i].prev = self.newest;
+        self.entries[i].next = NO_ENTRY;
+        self.entries[self.newest].next = i;
+        self.newest = i;
+    }
+
+    fn remove(&mut self, i: usize) {
+        self.unlink(i);
+        let old = self.entries.swap_remove(i);
+        self.l2.remove(&old.key);
+        self.l2_bytes -= old.bytes;
+        if i < self.entries.len() {
+            let moved = &self.entries[i];
+            let (key, prev, next) = (moved.key, moved.prev, moved.next);
+            *self.l2.get_mut(&key).expect("moved entry present") = i;
+            if prev == NO_ENTRY { self.oldest = i; } else { self.entries[prev].next = i; }
+            if next == NO_ENTRY { self.newest = i; } else { self.entries[next].prev = i; }
+        }
+    }
+
     fn evict_one(&mut self) {
-        let victim = self.l2.iter().min_by_key(|(_, e)| e.last_use).map(|(k, _)| *k);
-        if let Some(k) = victim {
-            let e = self.l2.remove(&k).expect("victim present");
-            self.l2_bytes -= e.bytes;
+        if self.oldest != NO_ENTRY {
+            self.remove(self.oldest);
             self.stats.evictions += 1;
         }
     }
@@ -150,6 +197,9 @@ impl ProgramCache {
     pub fn reset(&mut self) {
         self.l1.clear();
         self.l2.clear();
+        self.entries.clear();
+        self.oldest = NO_ENTRY;
+        self.newest = NO_ENTRY;
         self.l2_bytes = 0;
     }
 
@@ -176,14 +226,27 @@ impl ProgramCache {
 /// its shard's read lock and stamps the entry's use with one atomic store. Eviction drops the tier's `Arc` only: a
 /// backend that took the value keeps it. Plan-shape keyed, never results.
 pub struct SharedCache<V> {
-    shards: Box<[pgsync::RwLock<HashMap<u128, SharedEntry<V>>>]>,
+    shards: Box<[pgsync::RwLock<SharedShard<V>>]>,
     clock: std::sync::atomic::AtomicU64,
-    max_entries: usize,
-    budget_bytes: usize,
     hits: std::sync::atomic::AtomicU64,
     misses: std::sync::atomic::AtomicU64,
     inserts: std::sync::atomic::AtomicU64,
     evictions: std::sync::atomic::AtomicU64,
+}
+
+struct SharedShard<V> {
+    entries: HashMap<u128, SharedEntry<V>>,
+    bytes: usize,
+    max_entries: usize,
+    budget_bytes: usize,
+}
+
+impl<V> SharedShard<V> {
+    fn remove(&mut self, key: &u128) -> Option<SharedEntry<V>> {
+        let entry = self.entries.remove(key)?;
+        self.bytes -= entry.bytes;
+        Some(entry)
+    }
 }
 
 struct SharedEntry<V> {
@@ -206,14 +269,18 @@ pub struct SharedStats {
 pub const SHARDS: usize = 16;
 
 impl<V: Clone> SharedCache<V> {
-    /// `max_entries` / `budget_bytes` bound the whole tier; each shard takes its `1 / SHARDS` part (at least one entry).
+    /// Divide both hard limits across shards, including remainders. A zero limit disables admission.
     pub fn new(max_entries: usize, budget_bytes: usize) -> SharedCache<V> {
         use std::sync::atomic::AtomicU64;
-        let shards = (0..SHARDS).map(|_| pgsync::RwLock::new(HashMap::new())).collect::<Vec<_>>().into_boxed_slice(); // alloc: Cold
-        SharedCache { shards, clock: AtomicU64::new(0), max_entries: (max_entries / SHARDS).max(1), budget_bytes: budget_bytes / SHARDS, hits: AtomicU64::new(0), misses: AtomicU64::new(0), inserts: AtomicU64::new(0), evictions: AtomicU64::new(0) }
+        let shards = (0..SHARDS).map(|i| pgsync::RwLock::new(SharedShard {
+            entries: HashMap::new(), bytes: 0,
+            max_entries: max_entries / SHARDS + usize::from(i < max_entries % SHARDS),
+            budget_bytes: budget_bytes / SHARDS + usize::from(i < budget_bytes % SHARDS),
+        })).collect::<Vec<_>>().into_boxed_slice(); // alloc: Cold
+        SharedCache { shards, clock: AtomicU64::new(0), hits: AtomicU64::new(0), misses: AtomicU64::new(0), inserts: AtomicU64::new(0), evictions: AtomicU64::new(0) }
     }
 
-    fn shard(&self, key: u128) -> &pgsync::RwLock<HashMap<u128, SharedEntry<V>>> {
+    fn shard(&self, key: u128) -> &pgsync::RwLock<SharedShard<V>> {
         let h = (key as u64) ^ ((key >> 64) as u64);
         &self.shards[gravity_abi::hash::phi_top(h, 4) as usize % SHARDS]
     }
@@ -225,7 +292,7 @@ impl<V: Clone> SharedCache<V> {
     pub fn get(&self, key: u128) -> Option<V> {
         use std::sync::atomic::Ordering::Relaxed;
         let s = self.shard(key).read().unwrap_or_else(|e| e.into_inner());
-        match s.get(&key) {
+        match s.entries.get(&key) {
             Some(e) => {
                 e.last_use.store(self.tick(), Relaxed);
                 self.hits.fetch_add(1, Relaxed);
@@ -255,7 +322,7 @@ impl<V: Clone> SharedCache<V> {
     pub fn insert_over(&self, key: u128, value: V, bytes: usize, live: impl Fn(&V) -> bool) -> (V, bool) {
         use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
         let mut s = self.shard(key).write().unwrap_or_else(|e| e.into_inner());
-        if let Some(e) = s.get(&key) {
+        if let Some(e) = s.entries.get(&key) {
             if live(&e.value) {
                 e.last_use.store(self.tick(), Relaxed);
                 return (e.value.clone(), false);
@@ -263,23 +330,24 @@ impl<V: Clone> SharedCache<V> {
             s.remove(&key);
             self.evictions.fetch_add(1, Relaxed);
         }
-        if bytes > self.budget_bytes {
+        if s.max_entries == 0 || s.budget_bytes == 0 || bytes > s.budget_bytes {
             return (value, false);
         }
-        let mut used: usize = s.values().map(|e| e.bytes).sum();
-        while !s.is_empty() && (s.len() >= self.max_entries || used + bytes > self.budget_bytes) {
-            let victim = s.iter().min_by_key(|(_, e)| e.last_use.load(Relaxed)).map(|(k, _)| *k).expect("a non-empty shard");
-            let e = s.remove(&victim).expect("victim present");
-            used -= e.bytes;
+        // O(1) byte accounting on the uncontended insertion path. Keep shared/read-locked hits;
+        // an eviction still scans its bounded shard rather than making every hit a write lock.
+        while s.entries.len() >= s.max_entries || s.bytes > s.budget_bytes - bytes {
+            let victim = s.entries.iter().min_by_key(|(_, e)| e.last_use.load(Relaxed)).map(|(k, _)| *k).expect("a non-empty shard");
+            s.remove(&victim);
             self.evictions.fetch_add(1, Relaxed);
         }
-        s.insert(key, SharedEntry { value: value.clone(), bytes, last_use: AtomicU64::new(self.tick()) }); // alloc: Program
+        s.entries.insert(key, SharedEntry { value: value.clone(), bytes, last_use: AtomicU64::new(self.tick()) }); // alloc: Program
+        s.bytes += bytes;
         self.inserts.fetch_add(1, Relaxed);
         (value, true)
     }
 
     pub fn contains(&self, key: u128) -> bool {
-        self.shard(key).read().unwrap_or_else(|e| e.into_inner()).contains_key(&key)
+        self.shard(key).read().unwrap_or_else(|e| e.into_inner()).entries.contains_key(&key)
     }
 
     /// D4579: takes out every entry whose value `doomed` names (one that can never be served again: its database dropped,
@@ -291,6 +359,7 @@ impl<V: Clone> SharedCache<V> {
     /// entries taken.
     pub fn remove_where<const PASS: usize>(&self, doomed: impl Fn(&V) -> bool, mut gone: impl FnMut(V)) -> usize {
         use std::sync::atomic::Ordering::Relaxed;
+        assert!(PASS > 0, "remove_where requires a nonzero pass size");
         let mut n = 0;
         for s in self.shards.iter() {
             // bounded("a shard's doomed entries, PASS per pass: a pass that finds fewer, or takes none, ends the shard")
@@ -300,7 +369,7 @@ impl<V: Clone> SharedCache<V> {
                 {
                     let r = s.read().unwrap_or_else(|e| e.into_inner());
                     // bounded("a shard's entries, read once per pass")
-                    for (k, e) in r.iter() {
+                    for (k, e) in r.entries.iter() {
                         if doomed(&e.value) {
                             keys[found] = *k;
                             found += 1;
@@ -319,7 +388,7 @@ impl<V: Clone> SharedCache<V> {
                     let mut w = s.write().unwrap_or_else(|e| e.into_inner());
                     // bounded("the pass's keys, at most PASS")
                     for (k, slot) in keys[..found].iter().zip(taken.iter_mut()) {
-                        if w.get(k).is_some_and(|e| doomed(&e.value)) {
+                        if w.entries.get(k).is_some_and(|e| doomed(&e.value)) {
                             *slot = w.remove(k).map(|e| e.value);
                             took += 1;
                         }
@@ -341,7 +410,9 @@ impl<V: Clone> SharedCache<V> {
 
     pub fn reset(&self) {
         for s in self.shards.iter() {
-            s.write().unwrap_or_else(|e| e.into_inner()).clear();
+            let mut s = s.write().unwrap_or_else(|e| e.into_inner());
+            s.entries.clear();
+            s.bytes = 0;
         }
     }
 
@@ -350,8 +421,8 @@ impl<V: Clone> SharedCache<V> {
         let (mut entries, mut bytes) = (0, 0);
         for s in self.shards.iter() {
             let s = s.read().unwrap_or_else(|e| e.into_inner());
-            entries += s.len();
-            bytes += s.values().map(|e| e.bytes).sum::<usize>();
+            entries += s.entries.len();
+            bytes += s.bytes;
         }
         SharedStats { hits: self.hits.load(Relaxed), misses: self.misses.load(Relaxed), inserts: self.inserts.load(Relaxed), evictions: self.evictions.load(Relaxed), entries, bytes }
     }

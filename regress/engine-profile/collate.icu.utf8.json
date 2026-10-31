@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "reason": "Whole-input aggregation replaces PostgreSQL partial/final aggregation; collation query results remain unchanged.",
+  "source_sha256": "5457c0dfe8d9a767e5c3ac7ad661accad368474c50337a3578cb1cb8ec3bb762",
+  "expected_sha256": "42126929a3fa1eb04777c75f6a911eeea5def655810f57327266b58fbd7abed7",
+  "plans": [
+    {
+      "sql_sha256": "628a7e66979d2acdf9ef061a97d1bec42b6979b3b48f01ad92b5dccd63a034f3",
+      "occurrence": 2,
+      "sql_line": 1229,
+      "before_sha256": "504c2ea146eaeb6be70f33190bcd8b22718ef6b30a76b94169bdb430040a40f7",
+      "after": "                        QUERY PLAN                         \n-----------------------------------------------------------\n Sort\n   Sort Key: (upper(pagg_tab3.c)) COLLATE case_insensitive\n   ->  HashAggregate\n         Group Key: pagg_tab3.c\n         ->  Append\n               ->  Seq Scan on pagg_tab3_p2 pagg_tab3_1\n               ->  Seq Scan on pagg_tab3_p1 pagg_tab3_2\n(7 rows)\n"
+    }
+  ]
+}

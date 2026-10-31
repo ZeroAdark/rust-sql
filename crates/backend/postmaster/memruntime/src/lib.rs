@@ -352,6 +352,11 @@ fn own_view_in(own: u64, current: u64, stat: &[u8]) -> u64 {
 /// lock skips the store, retried at the next sample; a reader that finds it busy reads the files itself).
 static LIMIT: pgsync::Mutex<Option<MemLimit>> = pgsync::Mutex::new(None);
 
+/// Preserve a known exhausted budget; the page pool's older allocation cap uses zero for unknown/unlimited.
+fn known_pool_budget(limit: u64, budget: u64) -> Option<usize> {
+    (limit != 0).then(|| budget.min((usize::MAX - 1) as u64) as usize)
+}
+
 /// -> the limit read now, and whether it was stored in `LIMIT`
 fn store_limit() -> (MemLimit, bool) {
     let l = memory_limit(guc_tables::backing::pgrust_memory_watchdog_limit());
@@ -360,6 +365,7 @@ fn store_limit() -> (MemLimit, bool) {
         mcx::governor::publish_limit(l.bytes as usize);
     }
     LIMIT_BYTES.store(l.bytes, Ordering::Relaxed);
+    pagepool::set_reclaim_budget(known_pool_budget(l.bytes, mempolicy::snapshot::b_now(l.bytes, mcx::governor::bar() as u64)));
     open_sample(&l);
     let stored = LIMIT.try_lock().map(|mut cached| *cached = Some(l.clone())).is_ok();
     (l, stored)
@@ -838,7 +844,7 @@ fn c_library_in_use() -> Option<u64> {
 /// The allocator's resident bytes: the pages present in every mapping mimalloc made, which it names `mimalloc` (and
 /// pagegive keeps the name on a range it gives back). The ranges come from /proc/self/maps (no page-table walk), their
 /// present pages from mincore(2) over those ranges alone. Read only when a view asks, never by the sampler. `None` when
-/// the maps are unreadable or mincore refuses. pagepool P2: plus the page pool's present bytes (`pagepool::present`, its
+/// mapping names are unavailable, the maps are unreadable or mincore refuses. pagepool P2: plus the page pool's present bytes (`pagepool::present`, its
 /// own mincore over the superpages it holds and its lazy spans' committed bytes). Not its claimed bytes: a Cold take and a
 /// lazy span's commit count there before any page is faulted (P3 stress: U0 -1.9 GiB). ACCOUNTING ONLY (the views, the
 /// ladder's retained reading and the budget's retained floor): no kill-safety decision reads this; the watchdog's cancel
@@ -850,11 +856,70 @@ fn c_library_in_use() -> Option<u64> {
 /// on present.rs's SWEEPING; a reader meanwhile takes the sweep's result), and present_fresh shares a sweep under 250 ms
 /// old: at most ~4 sweeps a second whatever the number of readers (~40 ms CPU a second at a 10.9 GB-present pool).
 fn allocator_resident() -> Option<usize> {
+    // A failed read must not leave the previous reading's split visible. In particular, a kernel without
+    // anonymous VMA names has no identifiable mimalloc ranges: their absence does not mean zero resident bytes.
+    RESIDENT_SPLIT.with(|c| c.set(None));
+    if !vma_names_supported()? {
+        return None;
+    }
+    allocator_resident_lower_bound()
+}
+
+/// Preserve the reclaim ladder's existing conservative estimate when mapping names are unavailable: known named
+/// mappings plus the pool's independent mincore reading. This can undercount mimalloc and is not a reportable total.
+/// Kill safety continues to use the separate process/cgroup resident probes.
+fn allocator_resident_lower_bound() -> Option<usize> {
     let maps = present_in(&read_text("/proc/self/maps")?, |n| n == "[anon:mimalloc]")?;
     let mut pool = 0;
     let r = with_pool(maps, pagepool::on(), || pagepool::present_fresh().inspect(|&p| pool = p));
     RESIDENT_SPLIT.with(|c| c.set(r.map(|_| (maps, pool))));
     r
+}
+
+/// O(1) after the first conclusive probe; no allocation/free or query path calls this. Cache success and EINVAL
+/// (the kernel lacks anonymous VMA naming), but retry transient failures on the next diagnostic read.
+#[cfg(target_os = "linux")]
+fn vma_names_supported() -> Option<bool> {
+    use std::sync::atomic::AtomicU8;
+    static SUPPORT: AtomicU8 = AtomicU8::new(0);
+    match SUPPORT.load(Ordering::Relaxed) {
+        1 => Some(false),
+        2 => Some(true),
+        _ => {
+            let supported = probe_vma_names()?;
+            SUPPORT.store(if supported { 2 } else { 1 }, Ordering::Relaxed);
+            Some(supported)
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn vma_names_supported() -> Option<bool> {
+    Some(false)
+}
+
+#[cfg(target_os = "linux")]
+fn probe_vma_names() -> Option<bool> {
+    // SAFETY: sysconf reads a constant; the private mapping has no users and is never touched.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        return None;
+    }
+    let page = page as usize;
+    let p = unsafe { libc::mmap(core::ptr::null_mut(), page, libc::PROT_NONE, libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0) };
+    if p == libc::MAP_FAILED {
+        return None;
+    }
+    // SAFETY: a page-aligned anonymous range we own and a valid, NUL-terminated name. Preserve errno before munmap.
+    let rc = unsafe { libc::prctl(0x53564d41, 0 as libc::c_ulong, p as libc::c_ulong, page as libc::c_ulong, c"pgrust:residency-probe".as_ptr()) };
+    let error = (rc != 0).then(std::io::Error::last_os_error);
+    // SAFETY: release exactly the private mapping above, regardless of the prctl outcome.
+    unsafe { libc::munmap(p, page) };
+    match error {
+        None => Some(true),
+        Some(e) if e.raw_os_error() == Some(libc::EINVAL) => Some(false),
+        Some(_) => None,
+    }
 }
 
 std::thread_local! {
@@ -883,6 +948,9 @@ fn with_pool(maps: usize, on: bool, present: impl FnOnce() -> Option<usize>) -> 
 /// `pgrust:region:<breaker kind>` (`mempolicy::maps::region`; not the arena's nor `:mapped`), the way
 /// `allocator_resident` reads the allocator's. The names exist only while the memory policy's trace is on.
 fn region_resident() -> Option<usize> {
+    if !vma_names_supported()? || !mempolicy::trace::on() {
+        return None;
+    }
     present_in(&read_text("/proc/self/maps")?, is_region_name)
 }
 
@@ -2160,10 +2228,11 @@ fn backstop_reclaim(want: u64) -> u64 {
 /// is asked of running statements as spills (C5's revoke, `pgrust.memory_revoke`), and `mempolicy::watchdog::cancels`
 /// says whether this sample cancels. `None` under the threshold.
 /// ALLOC-LADDER (a): the allocator's retained bytes now, the view's formula (`memledger::arena::retained_of`): the present
-/// pages of its mappings (`allocator_resident`, a maps read + mincore: ~25 ms at 16 GiB) less what the accounts hold of
-/// it. `None` when the maps are unreadable.
+/// pages of its identifiable mappings plus the pool (a maps read + mincore: ~25 ms at 16 GiB) less what the accounts
+/// hold of it. This remains a lower bound on kernels without VMA names; the SQL diagnostic omits the incomplete total.
+/// `None` when the maps are unreadable.
 pub fn retained_now() -> Option<u64> {
-    let alloc_resident = allocator_resident()? as i64;
+    let alloc_resident = allocator_resident_lower_bound()? as i64;
     let mut heap = 0i64;
     memledger::for_each_row(|r| heap = heap.wrapping_add(r.account_bytes.wrapping_sub(r.mapped_bytes)));
     let given = memledger::given_back_bytes();
@@ -2960,6 +3029,15 @@ pub fn start(thread_init: impl FnOnce() + Send + 'static) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_zero_pool_budget_is_not_an_unknown_limit() {
+        assert_eq!(known_pool_budget(0, 0), None);
+        assert_eq!(known_pool_budget(0, 128 << 20), None);
+        assert_eq!(known_pool_budget(1 << 30, 0), Some(0));
+        assert_eq!(known_pool_budget(2 << 30, 896 << 20), Some(896 << 20));
+        assert_eq!(known_pool_budget(u64::MAX, u64::MAX), Some(usize::MAX - 1));
+    }
 
     /// D4872: the PSI file's `some` total (µs), as /proc/pressure/memory and a cgroup's memory.pressure write it; a file
     /// without a `some` line or a total reads None (that signal does not press).
@@ -4032,6 +4110,36 @@ mod tests {
             None => assert_eq!(s, None),
         }
         assert_eq!(super::take_allocator_resident_split(), None, "taken once");
+    }
+
+    /// Exercise the host syscall independently of the cached probe. A nameless host must not publish a zero total
+    /// or an older split; a host with names must expose the real, faulted test mapping to the mincore reader.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn residency_reporting_requires_available_mapping_names() {
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        let p = unsafe { libc::mmap(core::ptr::null_mut(), page, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0) };
+        assert_ne!(p, libc::MAP_FAILED);
+        // SAFETY: the first byte of our private page; naming changes only its diagnostic attribute.
+        unsafe { (p as *mut u8).write_volatile(1) };
+        let rc = unsafe { libc::prctl(0x53564d41, 0 as libc::c_ulong, p as libc::c_ulong, page as libc::c_ulong, c"pgrust:residency-test".as_ptr()) };
+        let error = (rc != 0).then(std::io::Error::last_os_error);
+        let maps = super::read_text("/proc/self/maps").expect("Linux maps are readable");
+        let named_resident = super::present_in(&maps, |n| n == "[anon:pgrust:residency-test]");
+        // SAFETY: the mapping made above; all reads are finished.
+        assert_eq!(unsafe { libc::munmap(p, page) }, 0);
+        if let Some(e) = error {
+            assert_eq!(e.raw_os_error(), Some(libc::EINVAL), "unexpected naming failure: {e}");
+            assert_eq!(named_resident, Some(0), "no name is not a zero-memory observation");
+            super::RESIDENT_SPLIT.with(|c| c.set(Some((7, 11))));
+            assert_eq!(super::allocator_resident(), None, "unknown must not be reported as zero");
+            assert_eq!(super::take_allocator_resident_split(), None, "unknown must clear the prior split");
+            assert_eq!(super::region_resident(), None);
+        } else {
+            assert_eq!(named_resident, Some(page), "the named, faulted page is counted");
+        }
+        assert_eq!(super::vma_names_supported(), Some(rc == 0));
+        assert_eq!(super::vma_names_supported(), Some(rc == 0), "cached capability agrees");
     }
 
     /// pagepool P2: the pool's present bytes join the allocator's resident ones only while the pool is on, and an

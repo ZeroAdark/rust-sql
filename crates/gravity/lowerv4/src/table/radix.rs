@@ -36,6 +36,16 @@ pub(crate) fn bits(b: &mut FunctionBuilder<'_>, env: &Env, t: &TableDecl) -> Val
 
 /// `ceil(log2(groups * rec / T1_DEFAULT_BYTES))` clamped to `[0, log2 T1_MAX_PARTS]`: 0 for no bound or one table's worth.
 pub(crate) fn bits_for(b: &mut FunctionBuilder<'_>, groups: Value, rec: u32) -> Value {
+    if rec == 0 {
+        return b.iconst(Type::I64, 0);
+    }
+    // Estimates can reach u64::MAX. Cap before multiplying so an overflow
+    // cannot turn a large table into an unpartitioned one. The cap already
+    // fills the maximum number of partitions; larger inputs have the same result.
+    let cap = (u64::from(t1_default_bytes()) * u64::from(T1_MAX_PARTS)).div_ceil(u64::from(rec));
+    let cap = b.iconst(Type::I64, cap as i64);
+    let over = b.icmp(IntCond::Ugt, groups, cap);
+    let groups = b.select(over, cap, groups);
     let one = b.iconst(Type::I64, 1);
     let r = b.iconst(Type::I64, rec as i64);
     let bytes = b.int_bin(IntBinOp::Mul, groups, r);
@@ -166,8 +176,18 @@ mod tests {
 
     #[test]
     fn the_bound_sets_one_table_of_records_per_partition() {
-        assert_eq!([bits(0, 32), bits(1000, 32), bits(16384, 32)], [0, 0, 0]);
-        assert_eq!([bits(16385, 32), bits(65536, 32), bits(1 << 20, 24)], [1, 2, 6]);
-        assert_eq!(bits(100_000_000, 32), 11);
+        let bytes = u64::from(gravity_abi::breaker::t1_default_bytes());
+        let max = u64::from(gravity_abi::breaker::T1_MAX_PARTS.trailing_zeros());
+        // The table budget follows the detected L2 share, not a fixed 512 KiB.
+        assert_eq!([bits(0, 32), bits(1, 32), bits(bytes / 32, 32)], [0, 0, 0]);
+        assert_eq!([bits(bytes / 32 + 1, 32), bits(4 * bytes / 32, 32)], [1, 2]);
+        for rec in [1, 24, 32, 64, u32::MAX] {
+            for groups in [0, 1, bytes / 32, 1 << 20, u64::MAX / 32 + 1, u64::MAX] {
+                let tables = (u128::from(groups) * u128::from(rec)).div_ceil(u128::from(bytes));
+                let expected = if tables <= 1 { 0 } else { u64::from(128 - (tables - 1).leading_zeros()).min(max) };
+                assert_eq!(bits(groups, rec), expected, "groups={groups}, record bytes={rec}");
+            }
+        }
+        assert_eq!(bits(u64::MAX, 0), 0);
     }
 }

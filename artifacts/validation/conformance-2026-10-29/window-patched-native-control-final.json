@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "profile": "patched-native-postgresql",
+  "reference_patch_sha256": "f08d320e017677b87846b6331b5191fc3edf28dddda98a887323819a1267ebad",
+  "cluster": "/home/rustsql/conformance/compat-wig5xoo5",
+  "version": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "binary_sha256": "7238ebbae4b544b7c063a84dc44a2db5669e8a51eb0a181637794f1d9253a623",
+  "returncode": 0,
+  "results": "/home/rustsql/conformance/compat-wig5xoo5/regression"
+}

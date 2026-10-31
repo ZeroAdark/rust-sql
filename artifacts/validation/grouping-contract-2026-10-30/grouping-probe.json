@@ -1,0 +1,1029 @@
+{
+  "passed": true,
+  "engines": {
+    "native": {
+      "cluster": "/home/rustsql/conformance/compat-pfrlb_53",
+      "version": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+      "binary_sha256": "07b16e1aa4f0e2206c37b339b6e4cc813aa8ab9e3c5516334f753b3d90d0c536",
+      "modes": {
+        "default": [
+          {
+            "name": "partial_integer_sort",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 12,
+            "expected_rows_sha256": "b3fdc40f30c8daee3f2552c3f066a635d68dd7d048430f1b1db020b814fd1287",
+            "actual_rows_sha256": "8b80ba05453ac3975d0b4ffde01d908f2d420f14ff753579ea94ac380347e064",
+            "equal_key_permutations_allowed": true,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 12.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "((COALESCE(gcheck.a, 0) + COALESCE(gcheck.b, 0)))"
+            ]
+          },
+          {
+            "name": "nullable_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "actual_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "empty_input",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 1,
+            "expected_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "actual_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 1.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "duplicate_sets",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 26,
+            "expected_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "actual_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 26.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "having_nullable_columns",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 3,
+            "expected_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "actual_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Incremental Sort",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 3.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "window_over_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23,
+              20
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "actual_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort",
+              "WindowAgg"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "target_set_returning",
+            "types": [
+              23,
+              23
+            ],
+            "rows": 6,
+            "expected_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "actual_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "ProjectSet",
+              "Sort",
+              "Values Scan"
+            ],
+            "root_actual_rows": 6.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(generate_series(1, \"*VALUES*\".column1))",
+              "((\"*VALUES*\".column1 + \"*VALUES*\".column2))"
+            ]
+          },
+          {
+            "name": "constant_rollup",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(1) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_null_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_constant_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "actual_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(2)"
+            ]
+          }
+        ]
+      }
+    },
+    "candidate": {
+      "cluster": "/home/rustsql/conformance/compat-ggm6o3s9",
+      "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build 0447a2b) on x86_64-unknown-linux-gnu, 64-bit",
+      "binary_sha256": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+      "modes": {
+        "default": [
+          {
+            "name": "partial_integer_sort",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 12,
+            "expected_rows_sha256": "b3fdc40f30c8daee3f2552c3f066a635d68dd7d048430f1b1db020b814fd1287",
+            "actual_rows_sha256": "a3c0b89033979023ea4e4b79d78178bd2ce960d3c4fc996d275035c0edf73f73",
+            "equal_key_permutations_allowed": true,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 12.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "((COALESCE(gcheck.a, 0) + COALESCE(gcheck.b, 0)))"
+            ]
+          },
+          {
+            "name": "nullable_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "actual_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "empty_input",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 1,
+            "expected_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "actual_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 1.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "duplicate_sets",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 26,
+            "expected_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "actual_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 26.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "having_nullable_columns",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 3,
+            "expected_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "actual_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Append",
+              "Result",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 3.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "a",
+              "(NULL::integer)",
+              "(1)"
+            ]
+          },
+          {
+            "name": "window_over_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23,
+              20
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "actual_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort",
+              "WindowAgg"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "target_set_returning",
+            "types": [
+              23,
+              23
+            ],
+            "rows": 6,
+            "expected_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "actual_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Group",
+              "ProjectSet",
+              "Result",
+              "Sort",
+              "Values Scan"
+            ],
+            "root_actual_rows": 6.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(generate_series(1, NULL::integer))",
+              "(NULL::integer)"
+            ]
+          },
+          {
+            "name": "constant_rollup",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Group",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_null_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_constant_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "actual_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(2)"
+            ]
+          }
+        ],
+        "off": [
+          {
+            "name": "partial_integer_sort",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 12,
+            "expected_rows_sha256": "b3fdc40f30c8daee3f2552c3f066a635d68dd7d048430f1b1db020b814fd1287",
+            "actual_rows_sha256": "a3c0b89033979023ea4e4b79d78178bd2ce960d3c4fc996d275035c0edf73f73",
+            "equal_key_permutations_allowed": true,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 12.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "((COALESCE(gcheck.a, 0) + COALESCE(gcheck.b, 0)))"
+            ]
+          },
+          {
+            "name": "nullable_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "actual_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "empty_input",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 1,
+            "expected_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "actual_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 1.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "duplicate_sets",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 26,
+            "expected_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "actual_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 26.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "having_nullable_columns",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 3,
+            "expected_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "actual_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Incremental Sort",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 3.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "window_over_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23,
+              20
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "actual_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Seq Scan",
+              "Sort",
+              "WindowAgg"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "gcheck.a",
+              "gcheck.b",
+              "(GROUPING(gcheck.a, gcheck.b))"
+            ]
+          },
+          {
+            "name": "target_set_returning",
+            "types": [
+              23,
+              23
+            ],
+            "rows": 6,
+            "expected_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "actual_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "ProjectSet",
+              "Sort",
+              "Values Scan"
+            ],
+            "root_actual_rows": 6.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(generate_series(1, \"*VALUES*\".column1))",
+              "((\"*VALUES*\".column1 + \"*VALUES*\".column2))"
+            ]
+          },
+          {
+            "name": "constant_rollup",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(1) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_null_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_constant_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "actual_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(2)"
+            ]
+          }
+        ],
+        "force": [
+          {
+            "name": "partial_integer_sort",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 12,
+            "expected_rows_sha256": "b3fdc40f30c8daee3f2552c3f066a635d68dd7d048430f1b1db020b814fd1287",
+            "actual_rows_sha256": "552b1327738f912a0cd15ec61daeac487f5d2a3acd1a5bbe727784610cc8f0a2",
+            "equal_key_permutations_allowed": true,
+            "plan_nodes": [
+              "Aggregate",
+              "Append",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 12.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(0)"
+            ]
+          },
+          {
+            "name": "nullable_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "actual_rows_sha256": "07f5312fc88a4c8303c2338a220270aceecf3db12c5c1c03ba7c4308a6d80bcd",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Incremental Sort",
+              "Merge Append",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer)",
+              "(NULL::integer)",
+              "(3)"
+            ]
+          },
+          {
+            "name": "empty_input",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 1,
+            "expected_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "actual_rows_sha256": "2f68d2bc6bcff8c92b696f9f6b01f3797d37dc416284a665132c6bb97db06745",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Incremental Sort",
+              "Merge Append",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 1.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer)",
+              "(NULL::integer)",
+              "(3)"
+            ]
+          },
+          {
+            "name": "duplicate_sets",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 26,
+            "expected_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "actual_rows_sha256": "443ccd9c9df26939961e08003832fb9e4282ecfae637a8151fb4cf8e72ce229d",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Incremental Sort",
+              "Merge Append",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 26.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer)",
+              "(NULL::integer)",
+              "(3)"
+            ]
+          },
+          {
+            "name": "having_nullable_columns",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23
+            ],
+            "rows": 3,
+            "expected_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "actual_rows_sha256": "c39057ef3621e2ef2162a56cf34c970ffd3adc8060461c457f89e38f574d2e43",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Append",
+              "Result",
+              "Seq Scan",
+              "Sort"
+            ],
+            "root_actual_rows": 3.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "a",
+              "(NULL::integer)",
+              "(1)"
+            ]
+          },
+          {
+            "name": "window_over_groups",
+            "types": [
+              23,
+              23,
+              23,
+              20,
+              20,
+              23,
+              20
+            ],
+            "rows": 16,
+            "expected_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "actual_rows_sha256": "1a90b0d2d937a0e4860ac414958bb8bf7b5090a146cc66d4efd35b9c44debcb9",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Aggregate",
+              "Incremental Sort",
+              "Merge Append",
+              "Seq Scan",
+              "Sort",
+              "WindowAgg"
+            ],
+            "root_actual_rows": 16.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer)",
+              "(NULL::integer)",
+              "(3)"
+            ]
+          },
+          {
+            "name": "target_set_returning",
+            "types": [
+              23,
+              23
+            ],
+            "rows": 6,
+            "expected_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "actual_rows_sha256": "3950e2b8e2ae456a4a658363a484f204257d32b6610531f252b906a21c26a2e7",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Group",
+              "ProjectSet",
+              "Result",
+              "Sort",
+              "Values Scan"
+            ],
+            "root_actual_rows": 6.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(generate_series(1, NULL::integer))",
+              "(NULL::integer)"
+            ]
+          },
+          {
+            "name": "constant_rollup",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Group",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_null_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "actual_rows_sha256": "7c461005387d3cdbb816fababfd490ba9b7a7c47fa726e721558a6be18f76064",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(NULL::integer) NULLS FIRST"
+            ]
+          },
+          {
+            "name": "union_constant_label",
+            "types": [
+              23
+            ],
+            "rows": 2,
+            "expected_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "actual_rows_sha256": "7df7c03ad1f4de3b78607b084bc11b714b2d4193c941df099819dbc7f866124b",
+            "equal_key_permutations_allowed": false,
+            "plan_nodes": [
+              "Append",
+              "Result",
+              "Sort"
+            ],
+            "root_actual_rows": 2.0,
+            "root_actual_loops": 1,
+            "sort_key": [
+              "(2)"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "full_report_archive_member": "probe/report.json"
+}

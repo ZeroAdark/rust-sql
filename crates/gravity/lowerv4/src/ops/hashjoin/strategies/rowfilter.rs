@@ -350,27 +350,29 @@ mod tests {
         assert!(8u64 << fb <= (share / 2).max(64), "2^{fb} words past half an L2 share of {share} bytes");
     }
 
-    /// Four bits of one word a key: every key's own bits are set, and a key outside the build passes about the blocked
-    /// formula's share (8-16 bits a key, four bits: 1-4 %), for sequential, strided and scattered keys alike.
+    /// Explicit budgets separate hash quality from this host's L2 capacity. Keep the original 4% guard at 8-16 bits
+    /// per key, and also check a capped filter and the supported four-bit floor. Every member must pass at each size.
     #[test]
     fn a_key_outside_the_build_passes_about_the_formula_share() {
         let sets: [(&str, Box<dyn Fn(u64) -> u64>); 3] = [("sequential", Box::new(|i| i)), ("stride 32", Box::new(|i| i * 32)), ("scattered", Box::new(|i| i.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 7))];
-        for (name, key) in sets {
-            let n = 200_000u64;
-            let fb = bits_for(n).expect("under the cap");
-            let mut w = vec![0u64; 1 << fb];
-            for i in 0..n {
-                let (at, m) = place(KeyHash::word(key(i)), fb);
-                w[at] |= m;
+        for (n, cap, expected_bits, max_fp) in [(200_000u64, 18, 15, 0.04), (200_000, 14, 14, 0.10), (262_144, 14, 14, 0.25)] {
+            let fb = within(n, cap).expect("under the explicit cap");
+            assert_eq!(fb, expected_bits);
+            for (name, key) in &sets {
+                let mut w = vec![0u64; 1 << fb];
+                for i in 0..n {
+                    let (at, m) = place(KeyHash::word(key(i)), fb);
+                    w[at] |= m;
+                }
+                let hit = |k: u64| {
+                    let (at, m) = place(KeyHash::word(k), fb);
+                    w[at] & m == m
+                };
+                assert!((0..n).all(|i| hit(key(i))), "{name}, {n} keys, cap {cap}: a member always passes");
+                let probes = 400_000u64;
+                let fp = (0..probes).filter(|&i| hit(key(n + 1 + i) ^ 1 << 62)).count() as f64 / probes as f64;
+                assert!(fp < max_fp, "{name}, {n} keys, cap {cap}: false positives {fp}, limit {max_fp}");
             }
-            let hit = |k: u64| {
-                let (at, m) = place(KeyHash::word(k), fb);
-                w[at] & m == m
-            };
-            assert!((0..n).all(|i| hit(key(i))), "{name}: a member always passes");
-            let probes = 400_000u64;
-            let fp = (0..probes).filter(|&i| hit(key(n + 1 + i) ^ 1 << 62)).count() as f64 / probes as f64;
-            assert!(fp < 0.04, "{name}: false positives {fp}");
         }
     }
 

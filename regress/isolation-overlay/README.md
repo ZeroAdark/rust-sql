@@ -9,6 +9,13 @@ upstream.
 
 ## Accepted divergences (expected output replaced)
 
+- `expected/merge-update.out`: the three instrumented MERGE plans include
+  Gravity's measured pipeline/site report when PostgreSQL-specific hash memory
+  statistics are unavailable. The 2026-10-29 update adds only those three
+  diagnostic blocks and their output row counts. Lock scheduling, errors,
+  affected rows and final table contents remain byte-identical. Unmeasured
+  PostgreSQL allocation/batch statistics must not be simulated to hide this block.
+
 - `expected/deadlock-parallel.out` (D575, Michael 2026-09-25: accept the
   divergence). Gravity's planner never builds a Gather or launches a
   PostgreSQL parallel worker (docs/gravity/milestone-1b.md §1.1 decision 6).

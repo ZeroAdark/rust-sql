@@ -1,0 +1,353 @@
+{
+  "complete": true,
+  "trials": [
+    {
+      "name": "budget-guard-pressure-20261031-1-baseline-observed",
+      "repetition": 1,
+      "variant": "baseline-observed",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 7,
+      "successful_queries": 6,
+      "failed_queries": [
+        {
+          "index": 6,
+          "sqlstate": "53200",
+          "error": "out of memory\nDETAIL:  The server's memory reached 90% of its limit and this statement held the most (peak 104620 kB); largest consumer \"pgrc part cache\" (100381 kB); ranked by resident memory (148116 kB resident, 104541 kB charged).\nHINT:  pgrust.memory_cancel_threshold canceled the statement holding the most memory."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 2350,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-1-candidate-unobserved",
+      "repetition": 1,
+      "variant": "candidate-unobserved",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 12,
+      "successful_queries": 11,
+      "failed_queries": [
+        {
+          "index": 11,
+          "sqlstate": null,
+          "error": "consuming input failed: server closed the connection unexpectedly\n\tThis probably means the server terminated abnormally\n\tbefore or while processing the request."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 5390,
+        "oom": 1,
+        "oom_kill": 3,
+        "oom_group_kill": 1
+      },
+      "shutdown": [
+        -9,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-1-postgresql",
+      "repetition": 1,
+      "variant": "postgresql",
+      "exit": 0,
+      "passed": true,
+      "error": null,
+      "queries": 12,
+      "successful_queries": 12,
+      "failed_queries": [],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 691.83984375
+    },
+    {
+      "name": "budget-guard-pressure-20261031-1-candidate-observed",
+      "repetition": 1,
+      "variant": "candidate-observed",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 5,
+      "successful_queries": 4,
+      "failed_queries": [
+        {
+          "index": 4,
+          "sqlstate": "53200",
+          "error": "out of memory\nDETAIL:  The server's memory reached 90% of its limit and this statement held the most (peak 105396 kB); largest consumer \"pgrc part cache\" (101157 kB); ranked by resident memory (144014 kB resident, 105317 kB charged).\nHINT:  pgrust.memory_cancel_threshold canceled the statement holding the most memory."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 2007,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-2-candidate-observed",
+      "repetition": 2,
+      "variant": "candidate-observed",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 7,
+      "successful_queries": 6,
+      "failed_queries": [
+        {
+          "index": 6,
+          "sqlstate": "53200",
+          "error": "out of memory\nDETAIL:  The server's memory reached 90% of its limit and this statement held the most (peak 123577 kB); largest consumer \"pgrc part cache\" (119338 kB); ranked by resident memory (712 kB resident, 123498 kB charged).\nHINT:  pgrust.memory_cancel_threshold canceled the statement holding the most memory."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 2483,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-2-postgresql",
+      "repetition": 2,
+      "variant": "postgresql",
+      "exit": 0,
+      "passed": true,
+      "error": null,
+      "queries": 12,
+      "successful_queries": 12,
+      "failed_queries": [],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 690.5546875
+    },
+    {
+      "name": "budget-guard-pressure-20261031-2-candidate-unobserved",
+      "repetition": 2,
+      "variant": "candidate-unobserved",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 6,
+      "successful_queries": 5,
+      "failed_queries": [
+        {
+          "index": 5,
+          "sqlstate": "53200",
+          "error": "out of memory\nDETAIL:  The server's memory reached 90% of its limit and this statement held the most (peak 219045 kB); largest consumer \"Gravity grant\" (119370 kB); ranked by resident memory (183273 kB resident, 218974 kB charged).\nHINT:  pgrust.memory_cancel_threshold canceled the statement holding the most memory."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 2417,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-2-baseline-observed",
+      "repetition": 2,
+      "variant": "baseline-observed",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 3,
+      "successful_queries": 2,
+      "failed_queries": [
+        {
+          "index": 2,
+          "sqlstate": "53200",
+          "error": "out of memory\nDETAIL:  The server's memory reached 90% of its limit and this statement held the most (peak 120730 kB); largest consumer \"pgrc part cache\" (116491 kB); ranked by resident memory (148118 kB resident, 120651 kB charged).\nHINT:  pgrust.memory_cancel_threshold canceled the statement holding the most memory."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 1079,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-3-candidate-unobserved",
+      "repetition": 3,
+      "variant": "candidate-unobserved",
+      "exit": 0,
+      "passed": true,
+      "error": null,
+      "queries": 12,
+      "successful_queries": 12,
+      "failed_queries": [],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 4960,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-3-baseline-observed",
+      "repetition": 3,
+      "variant": "baseline-observed",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 9,
+      "successful_queries": 8,
+      "failed_queries": [
+        {
+          "index": 8,
+          "sqlstate": "53200",
+          "error": "out of memory\nDETAIL:  The server's memory reached 90% of its limit and this statement held the most (peak 104620 kB); largest consumer \"pgrc part cache\" (100381 kB); ranked by resident memory (152214 kB resident, 104541 kB charged).\nHINT:  pgrust.memory_cancel_threshold canceled the statement holding the most memory."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 3906,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-3-candidate-observed",
+      "repetition": 3,
+      "variant": "candidate-observed",
+      "exit": 1,
+      "passed": false,
+      "error": null,
+      "queries": 4,
+      "successful_queries": 3,
+      "failed_queries": [
+        {
+          "index": 3,
+          "sqlstate": null,
+          "error": "consuming input failed: server closed the connection unexpectedly\n\tThis probably means the server terminated abnormally\n\tbefore or while processing the request."
+        }
+      ],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 2450,
+        "oom": 1,
+        "oom_kill": 3,
+        "oom_group_kill": 1
+      },
+      "shutdown": [
+        -9,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 1024.0
+    },
+    {
+      "name": "budget-guard-pressure-20261031-3-postgresql",
+      "repetition": 3,
+      "variant": "postgresql",
+      "exit": 0,
+      "passed": true,
+      "error": null,
+      "queries": 12,
+      "successful_queries": 12,
+      "failed_queries": [],
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      },
+      "shutdown": [
+        0,
+        0
+      ],
+      "restart_count": 1000000,
+      "peak_mib": 690.54296875
+    }
+  ]
+}

@@ -40,6 +40,7 @@ use crate::sync::{AtomicBool, AtomicU16, AtomicU8, AtomicUsize, Ordering::*};
 pub use affinity::{helper_pins, set_helper_cpus, HELPER_MAX_CPUS};
 pub use api::*;
 pub use claimer::{claim_room, prefill, set_claim_room};
+pub use purger::set_reclaim_budget;
 pub use present::{build_present, cache_present, free_present, meta_present, present, present_age_ms, present_due_now, present_fresh, present_split, present_split_build, present_sweep, present_sweep_by, present_sweep_ns, present_sweeps, present_zero, refresh_present, in_ram_seam, residency_seam};
 pub use purger::{guard_counts, host_counts, set_host_pressed, HostCounts, landing, lazy_pass_now, note_end_give, lazy_pass_timed_now, peak_counts, purge_now, r1_counts, GuardCounts, PeakCounts, CLIMB_MIN, CLIMB_MS, LEVER_AGE, LEVER_DEAD1, LEVER_SKIP, LEVER_WARM1, SKIP_MIN, WALK_MS, GUARD_BINS, GUARD_BIN_ROWS, GUARD_BIN_US, releasable, return_warm, return_warm_now, serve_ask_now, set_pressure, Pressure, R1Counts, R1_BINS, R1_BIN_MS, R1_BIN_ROWS, R1_STEPS, R1_STEP_ROWS};
 pub use run::{run_of, Kind, RunInfo};
@@ -511,8 +512,9 @@ pub fn on() -> bool {
     ON.load(Relaxed)
 }
 
-/// The session's idle point (after ReadyForQuery, before a thread parks): `PoolAlloc`'s cache runs and pending remote
-/// frees leave the thread. One relaxed load unless `PoolAlloc` serves the process.
+/// The session's idle point (after ReadyForQuery, before a thread parks): hand current small runs to other threads
+/// for reuse, and send pending remote frees. Live blocks stay valid. One relaxed load unless `PoolAlloc` serves the
+/// process; otherwise the scan is bounded by its fixed size classes, without walking partial or full lists.
 #[inline]
 pub fn idle_point() {
     #[cfg(all(feature = "global", not(target_family = "wasm")))]

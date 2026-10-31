@@ -1,0 +1,778 @@
+{
+  "runtime_commit": "b2c98c8576d9f1b73e12124c749e5129fcb16c27",
+  "candidate_sha256": "5c1049ca3dd5d17fb91c7cca088808c4afce8236f62fa1807bcd094d7696555a",
+  "reference_sha256": "07b16e1aa4f0e2206c37b339b6e4cc813aa8ab9e3c5516334f753b3d90d0c536",
+  "production_qualified": false,
+  "performance_comparison": false,
+  "runs": [
+    {
+      "name": "churn-full4g",
+      "status": "pass",
+      "passed": true
+    },
+    {
+      "name": "churn-full2g",
+      "status": "pass",
+      "passed": true
+    },
+    {
+      "name": "spill-final",
+      "status": "pass",
+      "passed": true
+    },
+    {
+      "name": "spill-million",
+      "status": "failure",
+      "passed": false
+    },
+    {
+      "name": "spill-million-diagnostic",
+      "status": "pass",
+      "passed": true
+    },
+    {
+      "name": "spill-million-repeat1",
+      "status": "pass",
+      "passed": true
+    },
+    {
+      "name": "spill-million-repeat2",
+      "status": "pass",
+      "passed": true
+    },
+    {
+      "name": "spill-million-repeat3",
+      "status": "pass",
+      "passed": true
+    },
+    {
+      "name": "spill-pilot",
+      "status": "superseded",
+      "passed": true
+    },
+    {
+      "name": "spill-cleanup-cancel",
+      "status": "superseded",
+      "passed": true
+    }
+  ],
+  "files": {
+    "churn-full4g/report.json": {
+      "bytes": 2892061,
+      "sha256": "01aff1116894b79583b06710f521f19109ac0b4b4e106f38b4af0aea59c4cffd"
+    },
+    "churn-full4g/controller.log": {
+      "bytes": 9542,
+      "sha256": "6aba200669dcbfbe0174e7a329131979956fdce0287976c968584c69e4a2128e"
+    },
+    "churn-full4g/command.json": {
+      "bytes": 1236,
+      "sha256": "7c6ced72f451ccca92ea418477b903179082e6876c5af11217b3cf6b70e49303"
+    },
+    "churn-full4g/journal.log": {
+      "bytes": 690,
+      "sha256": "885fcdb796c8eae4ec6503a774689ac4c474f157d3cf40d16b36f7900a734015"
+    },
+    "churn-full4g/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "churn-full4g/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "churn-full4g/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "churn-full4g/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "churn-full4g/candidate/server.log": {
+      "bytes": 6186524,
+      "sha256": "d814d008e5f017055267472e3bd642e85414cbc75671c0ebd21dcee463131b0e"
+    },
+    "churn-full4g/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "b1b08e0b906dc3d6732e10240ef0a6405f0a8d3a76ea2c83c92be96c14ee4dad"
+    },
+    "churn-full4g/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "churn-full4g/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "churn-full4g/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "churn-full2g/report.json": {
+      "bytes": 2889905,
+      "sha256": "dd42502db5f9c1d8ca422a26597907af39e0182d3c93cefa0f69f8ad343e54c2"
+    },
+    "churn-full2g/controller.log": {
+      "bytes": 9514,
+      "sha256": "c1a6a55ebd1784971a9261a2775c7c0782c06752c687f2a7c0df75b3456dfb84"
+    },
+    "churn-full2g/command.json": {
+      "bytes": 1236,
+      "sha256": "0bdc46d4457979a14660c1060f15db1ae67a9d4d30c9e6e48a07417ac02d65fb"
+    },
+    "churn-full2g/journal.log": {
+      "bytes": 690,
+      "sha256": "bc33a568ec03a7f815f02a28e10518577c4e787bf4e484fcff5a85ac2ed44861"
+    },
+    "churn-full2g/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "churn-full2g/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "churn-full2g/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "churn-full2g/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "churn-full2g/candidate/server.log": {
+      "bytes": 6213408,
+      "sha256": "74f303357b757c1c3c379d9e63d9971e46de5b9b15eb7e9e379d3d4116478c4f"
+    },
+    "churn-full2g/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "4b487c5ae7127fe340ff8300e7fe1058e3d7ff05b4b9e8a3ffc95f0ee4c51e30"
+    },
+    "churn-full2g/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "churn-full2g/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "churn-full2g/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-final/report.json": {
+      "bytes": 77281,
+      "sha256": "d5f4294023e95bb1ebf7278983a09cc7efbbbe433fec5510607100c39269fbeb"
+    },
+    "spill-final/controller.log": {
+      "bytes": 1141,
+      "sha256": "b0c6dbfde7492b62cd84816ea5991219461ecf155f651eee30ac7d7c6402691b"
+    },
+    "spill-final/command.json": {
+      "bytes": 1209,
+      "sha256": "454999fea37800156e3e71ba4df3251d5694d623aa9b6ecbaa706af4b1c65f67"
+    },
+    "spill-final/journal.log": {
+      "bytes": 682,
+      "sha256": "861bb3e41974fbac8d1fbe34af8a17e6417cad93a4dfa28a5f9f803c54e0e082"
+    },
+    "spill-final/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-final/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-final/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-final/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-final/source/spill_probe.py": {
+      "bytes": 13793,
+      "sha256": "08daf4043ab600d1c60ce8d3e4788674e4d1ca7467b2a354292724b26a9f2616"
+    },
+    "spill-final/reference/server.log": {
+      "bytes": 4727,
+      "sha256": "1a318be98d303b95dbcbe0f0aaf393584cb50c6495b46348d54113e15df43551"
+    },
+    "spill-final/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "38010282ea888455d7f0e523d7d7ae8014c1b768a35fdb3a91959413dc684f85"
+    },
+    "spill-final/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-final/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-final/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-final/candidate/server.log": {
+      "bytes": 6609,
+      "sha256": "7aa236117f708e8d93ff6ea3dad8d3b19bb2be9ac07c05f186b19c3af454767a"
+    },
+    "spill-final/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "308e03048badfc80a928c3c7e283ee2b53e94400571513108bb1250d3ee4234a"
+    },
+    "spill-final/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-final/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-final/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million/report.json": {
+      "bytes": 14051,
+      "sha256": "2eddcbf31b0f9a8912a4ad8be48cbc43e9619c03f4a065fa127aad7dbd0bc992"
+    },
+    "spill-million/controller.log": {
+      "bytes": 1057,
+      "sha256": "4eb54aff9ee522cd54a282c6f372b81bd05b2873af66dded6e235f903ee131b9"
+    },
+    "spill-million/command.json": {
+      "bytes": 1250,
+      "sha256": "0c17f5bccb72f560a425bf992ea260b433f4174a020a0495e84971f604d038c1"
+    },
+    "spill-million/journal.log": {
+      "bytes": 870,
+      "sha256": "2acb882587d57ad53873d2d53f51c53a9b5f548fb49af2972c93882c66d5bf8a"
+    },
+    "spill-million/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-million/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-million/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-million/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-million/source/spill_probe.py": {
+      "bytes": 12469,
+      "sha256": "9706dca46e7203a39d799277642f31761597e4766ad6e13a0df8f217b7d3fd0a"
+    },
+    "spill-million/reference/server.log": {
+      "bytes": 4734,
+      "sha256": "b9cfb05fe472551e1f160c387d87156b8d860ba91292e786232e1cccd17c5c43"
+    },
+    "spill-million/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "a087dd485fd420198b256a50dbfd9992cc5d80354e1e7a4e6b0eb429010459f3"
+    },
+    "spill-million/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-million/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million/candidate/server.log": {
+      "bytes": 22336,
+      "sha256": "1f1f7cfc2223182af40d5601c779f6d0d1e3d2330694a13640c7e0c5deb830fc"
+    },
+    "spill-million/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "aff51b231bd551d9313891a9d2d06c0280dc5b001e97c0baf7bfb081ae65de5b"
+    },
+    "spill-million/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-million/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-diagnostic/report.json": {
+      "bytes": 77754,
+      "sha256": "599770a8334b18212ec80f2e727117296c37b60433c31d5596dd468bfc114232"
+    },
+    "spill-million-diagnostic/controller.log": {
+      "bytes": 1143,
+      "sha256": "10532e9645bfe05483c550f782511f071e2cba81aa9720c0cf5c9c3cfff9e13c"
+    },
+    "spill-million-diagnostic/command.json": {
+      "bytes": 1314,
+      "sha256": "39d31b85246a4511605ba46a10a8efc4489289eec402da1020ef1c0c9be459d3"
+    },
+    "spill-million-diagnostic/journal.log": {
+      "bytes": 760,
+      "sha256": "4b851a9dfef0b4df92f4689b9a320e7079cbc072c599bbe2f9867da1d7443359"
+    },
+    "spill-million-diagnostic/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-million-diagnostic/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-million-diagnostic/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-million-diagnostic/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-million-diagnostic/source/spill_probe.py": {
+      "bytes": 13793,
+      "sha256": "08daf4043ab600d1c60ce8d3e4788674e4d1ca7467b2a354292724b26a9f2616"
+    },
+    "spill-million-diagnostic/reference/server.log": {
+      "bytes": 4733,
+      "sha256": "f57de2563eaf3a98d2008e5330915f48645109c84bee1b922a6aae9feb41774a"
+    },
+    "spill-million-diagnostic/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "75d774282d213514a13c783566261367d8d37897c1a3052f74a668cc331eb7e9"
+    },
+    "spill-million-diagnostic/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-million-diagnostic/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-diagnostic/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-diagnostic/candidate/server.log": {
+      "bytes": 31516,
+      "sha256": "4f0625dfce91f2dd568c40cc0b3178b2e1a243696a09a71dce45a308d61b0cb2"
+    },
+    "spill-million-diagnostic/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "8d224190d3ee08e56cf135dff8241a7f8d7adbd901ea7b80bb29548e5d23107f"
+    },
+    "spill-million-diagnostic/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-million-diagnostic/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-diagnostic/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-repeat1/report.json": {
+      "bytes": 77789,
+      "sha256": "6e370c03fc3d446862f4df94c1cf19a04fa7c38f527edffa564bf57e35dd72f7"
+    },
+    "spill-million-repeat1/controller.log": {
+      "bytes": 1143,
+      "sha256": "10c66cf68c623b20dec864bc8f5ee21a494d649d09ea2bf8a7a2afb886b5b92a"
+    },
+    "spill-million-repeat1/command.json": {
+      "bytes": 1296,
+      "sha256": "3ceffa06c74295090db821846df90abd246caf4197996688b34b4885c154eb7e"
+    },
+    "spill-million-repeat1/journal.log": {
+      "bytes": 745,
+      "sha256": "b5af95660d70809fc09b3c714bd54906b9741a8901c947c82be3b66cf6198303"
+    },
+    "spill-million-repeat1/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-million-repeat1/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-million-repeat1/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-million-repeat1/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-million-repeat1/source/spill_probe.py": {
+      "bytes": 13793,
+      "sha256": "08daf4043ab600d1c60ce8d3e4788674e4d1ca7467b2a354292724b26a9f2616"
+    },
+    "spill-million-repeat1/reference/server.log": {
+      "bytes": 4734,
+      "sha256": "fe852fb18f530cebeb8674c57c488f2fad268e9e2249be819d9060ab1248e1bc"
+    },
+    "spill-million-repeat1/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "970a605a33297c9112581c047a0379d44cea8a3a8fd0ad2fec6cfad3dad9889f"
+    },
+    "spill-million-repeat1/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-million-repeat1/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-repeat1/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-repeat1/candidate/server.log": {
+      "bytes": 20838,
+      "sha256": "36fee391982302a568021957a71a6167d2bbe5dc9d94380571add82658e35b16"
+    },
+    "spill-million-repeat1/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "ccec474b583c76707d71590447a356c54cd99ef05140bb44b6ff880bcf5d7657"
+    },
+    "spill-million-repeat1/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-million-repeat1/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-repeat1/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-repeat2/report.json": {
+      "bytes": 77745,
+      "sha256": "516ffdc89dd7b80b0d06659317ce88747a9f584ece6c0290ffd463a24d54b50b"
+    },
+    "spill-million-repeat2/controller.log": {
+      "bytes": 1143,
+      "sha256": "63f081846730d8bda62de48c4560ef3b9197c9853ec13b9784ef5008a7beae94"
+    },
+    "spill-million-repeat2/command.json": {
+      "bytes": 1296,
+      "sha256": "6ff6cb756a0f9c9e8b1caf62faca2daa02ff0e6eda924d533735c13435a47fb4"
+    },
+    "spill-million-repeat2/journal.log": {
+      "bytes": 745,
+      "sha256": "39653a2699dc68d6ebbf425577bd8b9c5e45fd7ffa24ac4676304bdb36a36704"
+    },
+    "spill-million-repeat2/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-million-repeat2/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-million-repeat2/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-million-repeat2/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-million-repeat2/source/spill_probe.py": {
+      "bytes": 13793,
+      "sha256": "08daf4043ab600d1c60ce8d3e4788674e4d1ca7467b2a354292724b26a9f2616"
+    },
+    "spill-million-repeat2/reference/server.log": {
+      "bytes": 4733,
+      "sha256": "85a835164207d4d643446e8c3fa92b08b605ccb196ce1719d7ae819b0b805e9b"
+    },
+    "spill-million-repeat2/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "4f4377d590d002c37a0ca0759454849576b05246306a8e762cfaa1000cc46be8"
+    },
+    "spill-million-repeat2/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-million-repeat2/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-repeat2/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-repeat2/candidate/server.log": {
+      "bytes": 24271,
+      "sha256": "c718ad134abf1bc45fd2b0c54819d30dccc1e4ab76bceef49592121f404c3c25"
+    },
+    "spill-million-repeat2/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "34ea4bc6c5a87ef12350b9ef804f170404ce0e881c9bca5337e1ded919d13cc3"
+    },
+    "spill-million-repeat2/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-million-repeat2/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-repeat2/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-repeat3/report.json": {
+      "bytes": 77745,
+      "sha256": "418e4fad6fa38c15ad547204335f13d15dd4f4de6304ab511e85c15d621aef9e"
+    },
+    "spill-million-repeat3/controller.log": {
+      "bytes": 1143,
+      "sha256": "d476f8481a5c523c4ec5435839bf5ff8b149246517c47033f5e43e833b28eb45"
+    },
+    "spill-million-repeat3/command.json": {
+      "bytes": 1296,
+      "sha256": "ada66e9854a560a51cf88ca1b8a19e7877b7127e86142970aa6b41638cc7ca25"
+    },
+    "spill-million-repeat3/journal.log": {
+      "bytes": 745,
+      "sha256": "1deb77e891b3da9176cfe500b0c87a05aca9ec803be3c2d0200a6dae26d89de8"
+    },
+    "spill-million-repeat3/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-million-repeat3/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-million-repeat3/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-million-repeat3/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-million-repeat3/source/spill_probe.py": {
+      "bytes": 13793,
+      "sha256": "08daf4043ab600d1c60ce8d3e4788674e4d1ca7467b2a354292724b26a9f2616"
+    },
+    "spill-million-repeat3/reference/server.log": {
+      "bytes": 4733,
+      "sha256": "cad56555e60d057c34956e6dafe2c634916b81e2fd3d0092647fce58e4951083"
+    },
+    "spill-million-repeat3/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "ea3454a70c00c4f1889c6df30f7c8d6dceea1688e671a553a368a0b6ab176b9e"
+    },
+    "spill-million-repeat3/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-million-repeat3/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-repeat3/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-million-repeat3/candidate/server.log": {
+      "bytes": 31587,
+      "sha256": "c628d1f8f6db8cf60960f62b31998421998a6f5bc503f2059c00fd9c264a3ed5"
+    },
+    "spill-million-repeat3/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "51935490cdb1b700b603a6b33b723e4c12b03bdba7ea37b31f5216c2c01387da"
+    },
+    "spill-million-repeat3/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-million-repeat3/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-million-repeat3/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-pilot/report.json": {
+      "bytes": 17339,
+      "sha256": "796648e6612e0322a0d3047254200cbeac3decd5650844624404e7f14a464b68"
+    },
+    "spill-pilot/controller.log": {
+      "bytes": 1141,
+      "sha256": "3d9188f299b82cf972ddcccd0943527ea4f7fa65c78b34a6669363cfff5c8577"
+    },
+    "spill-pilot/command.json": {
+      "bytes": 1207,
+      "sha256": "d183a0a651accf1db150ca437ad48ad5214d2286e826928d36e92efc95a106bd"
+    },
+    "spill-pilot/journal.log": {
+      "bytes": 680,
+      "sha256": "8924c15ead48ba4e917bf9efc4bbfc9f70c39014dcd245054709bff163090898"
+    },
+    "spill-pilot/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-pilot/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-pilot/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-pilot/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-pilot/source/spill_probe.py": {
+      "bytes": 9826,
+      "sha256": "5e8b1ec5f011018bf44812cc549205b648891ac1414afa7aabeb7303294626d0"
+    },
+    "spill-pilot/reference/server.log": {
+      "bytes": 3511,
+      "sha256": "5b7ec555f5b7e04ecd69ae5ac4eef1b10bd2b7b527f9ebf04e0ffde1ee1c8332"
+    },
+    "spill-pilot/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "0dda5cb31f0fc8933011170756016187bf47f51a217ebd26c23ae20eef376701"
+    },
+    "spill-pilot/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-pilot/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-pilot/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-pilot/candidate/server.log": {
+      "bytes": 5529,
+      "sha256": "09297c87ff877540340876357ad1c773b27c51fb70ed0100055b38ff9f285dc5"
+    },
+    "spill-pilot/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "62eee482affa484c971202becf5d4af261ddd150da142831b83a6c172839d687"
+    },
+    "spill-pilot/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-pilot/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-pilot/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-cleanup-cancel/report.json": {
+      "bytes": 18763,
+      "sha256": "4f80522c553a20300133ff8804b67aea35d5cfa3d5d3df022b05e56985b2236c"
+    },
+    "spill-cleanup-cancel/controller.log": {
+      "bytes": 1141,
+      "sha256": "85cd7cc18a40c4f8e645339592737cf8ef5460591c095732a43d58c9952f2eaf"
+    },
+    "spill-cleanup-cancel/command.json": {
+      "bytes": 1261,
+      "sha256": "7c128dd4e6982ed16b0f6720a90699ed0f07474294367646fde23c258b421b99"
+    },
+    "spill-cleanup-cancel/journal.log": {
+      "bytes": 725,
+      "sha256": "1d17b2b18d4d4e37f013211cc06ce7010663033fbb1f51b200509d398a044d6c"
+    },
+    "spill-cleanup-cancel/source/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "spill-cleanup-cancel/source/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "spill-cleanup-cancel/source/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "spill-cleanup-cancel/source/resource_scope.py": {
+      "bytes": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    "spill-cleanup-cancel/source/spill_probe.py": {
+      "bytes": 12469,
+      "sha256": "9706dca46e7203a39d799277642f31761597e4766ad6e13a0df8f217b7d3fd0a"
+    },
+    "spill-cleanup-cancel/reference/server.log": {
+      "bytes": 4727,
+      "sha256": "16f3e07202df6f52a4ef3df75fecd9dcef178b2dba37010d919003561b8e31ee"
+    },
+    "spill-cleanup-cancel/reference/initdb.log": {
+      "bytes": 886,
+      "sha256": "1a86832df56bcc3407da71914974c68dfe49107d9fa9721fa31da9b2b7db9620"
+    },
+    "spill-cleanup-cancel/reference/data/postgresql.conf": {
+      "bytes": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    "spill-cleanup-cancel/reference/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-cleanup-cancel/reference/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    "spill-cleanup-cancel/candidate/server.log": {
+      "bytes": 6609,
+      "sha256": "7fb79406f7d8b578b72fb4c05500a37723ac8a90c33d16f65ca271d9530ab036"
+    },
+    "spill-cleanup-cancel/candidate/initdb.log": {
+      "bytes": 2246,
+      "sha256": "949ff44026ec7434336951e255a2c80e1cda07d45b33106e122e6692c524a971"
+    },
+    "spill-cleanup-cancel/candidate/data/postgresql.conf": {
+      "bytes": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    "spill-cleanup-cancel/candidate/data/postgresql.auto.conf": {
+      "bytes": 88,
+      "sha256": "0874e665ecf5c0a6135a73158ea1b71a959dafb809574810da5c9cc28c0c63ed"
+    },
+    "spill-cleanup-cancel/candidate/data/pg_hba.conf": {
+      "bytes": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    }
+  },
+  "archive": {
+    "name": "evidence.tar.gz",
+    "bytes": 2595369,
+    "sha256": "fdf3fe6e1d7ee65f4117c016ce71d2cfe370f1299d99c10b0892038cc6ebc50d"
+  }
+}

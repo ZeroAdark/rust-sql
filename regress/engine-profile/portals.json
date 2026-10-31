@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "reason": "Gravity cursor support does not need PostgreSQL Materialize plan wrappers; all cursor fetch results remain unchanged.",
+  "source_sha256": "846dac9c982942c1adf7ad51333843d1dd3f860fec3cf2b3d4a7871fa1dda6ed",
+  "expected_sha256": "fe6a7b0b86722fd0adedaf013f7caedb54ffa984b92a77ccb5cd366af1b7cc5b",
+  "plans": [
+    {
+      "sql_sha256": "ce61d8914085ca4bf851eccccec66a55013b6aa8d9925733c8f8af1d5145243e",
+      "occurrence": 1,
+      "sql_line": 577,
+      "before_sha256": "73a6ac9396d8bf76deef30b5549b8d6e433398e6a8d84b8fbd6e917b11472cc3",
+      "after": "   QUERY PLAN   \n----------------\n Result\n   InitPlan 1\n     ->  Result\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "2ec0e8147bd4e7bb56bad73292c521e716879d4e20263e327d5fe1f6b34d0858",
+      "occurrence": 1,
+      "sql_line": 584,
+      "before_sha256": "108a63429ae28f8126a6367a52d5821260b2b3ed731c50d8f2c151a27f0fb42e",
+      "after": "  QUERY PLAN  \n--------------\n ProjectSet\n   ->  Result\n(2 rows)\n"
+    }
+  ]
+}

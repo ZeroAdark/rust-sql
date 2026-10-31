@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "reason": "Engine semi-join orientation and nested join plan choices differ; all join result values remain unchanged.",
+  "source_sha256": "2182a7d327ba88f384723e9dc3905fb9ac84650e88e3bab4e8df8a79c19392eb",
+  "expected_sha256": "6b08d51704804395f98169ef547c550ba64aeb008f2ead7eb0360292ea2bbaa0",
+  "plans": [
+    {
+      "sql_sha256": "55f74dc7ed2c68ecab0bc9bbe9b9744e149513e213603f42a9c5dda979e1df18",
+      "occurrence": 1,
+      "sql_line": 775,
+      "before_sha256": "f39ce591aa69ea9cbb02710c23b3371aff66745a0faf157586e27551e1e39a19",
+      "after": "                 QUERY PLAN                 \n--------------------------------------------\n Hash Right Semi Join\n   Hash Cond: (t2.fivethous = t1.fivethous)\n   ->  Seq Scan on tenk1 t2\n   ->  Hash\n         ->  Seq Scan on tenk1 t1\n               Filter: (fivethous < 5)\n(6 rows)\n"
+    },
+    {
+      "sql_sha256": "1efaaeb9701c8e4af9f10a91e18223df7349e955577895f83eafba2fb5364905",
+      "occurrence": 1,
+      "sql_line": 3031,
+      "before_sha256": "8a42e9f0d0319e31b884087bcaa2a567c728835912d10326a14d5db9c8232cdf",
+      "after": "                          QUERY PLAN                           \n---------------------------------------------------------------\n Nested Loop\n   Output: 1\n   ->  Seq Scan on public.tbl_phv t1\n         Output: t1.x, t1.y\n   ->  Memoize\n         Output: tr.y, tr.x\n         Cache Key: (t1.x % 2)\n         Cache Mode: logical\n         ->  Index Scan using tbl_phv_idx on public.tbl_phv tr\n               Output: tr.y, tr.x\n               Index Cond: (tr.x = (t1.x % 2))\n               Filter: (1 IS NOT NULL)\n(12 rows)\n"
+    }
+  ]
+}

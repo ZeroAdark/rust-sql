@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "reason": "CTAS, SELECT INTO and materialized view plans use the engine aggregation path without PostgreSQL backend-worker Gather nodes.",
+  "source_sha256": "80ea16d9dc41b8f82c072f4fcf95542ea8436aa377eb7203aa4b79164bd856cf",
+  "expected_sha256": "69a717aa2e49c482cc0e9c8f42b4411792fe4be6bece125030a67c4918877e51",
+  "plans": [
+    {
+      "sql_sha256": "f0431b6e7caa5cf9e5497649e2231b5aa750fa7a7e1f8a881eec8188c0832cd2",
+      "occurrence": 1,
+      "sql_line": 17,
+      "before_sha256": "1638843df8193b2e6856f4d79dfd985aebbbdfad26430c7fc529e1913d3126b2",
+      "after": "              QUERY PLAN               \n---------------------------------------\n HashAggregate\n   Group Key: length((stringu1)::text)\n   ->  Seq Scan on tenk1\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "2b45ae554af44dbe12862b4dfaab47b86f1de2849e28394af4d2a9997ec40b01",
+      "occurrence": 1,
+      "sql_line": 23,
+      "before_sha256": "1638843df8193b2e6856f4d79dfd985aebbbdfad26430c7fc529e1913d3126b2",
+      "after": "              QUERY PLAN               \n---------------------------------------\n HashAggregate\n   Group Key: length((stringu1)::text)\n   ->  Seq Scan on tenk1\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "0ed159ed4e2b4b3090a9e7438a35b06302c3fce04da947c3e2aa75a9c9bcc8d6",
+      "occurrence": 1,
+      "sql_line": 29,
+      "before_sha256": "1638843df8193b2e6856f4d79dfd985aebbbdfad26430c7fc529e1913d3126b2",
+      "after": "              QUERY PLAN               \n---------------------------------------\n HashAggregate\n   Group Key: length((stringu1)::text)\n   ->  Seq Scan on tenk1\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "e22b85415341df65eba2808e22383552669bd8178ea9a80d6372cae877620b9e",
+      "occurrence": 1,
+      "sql_line": 39,
+      "before_sha256": "1638843df8193b2e6856f4d79dfd985aebbbdfad26430c7fc529e1913d3126b2",
+      "after": "              QUERY PLAN               \n---------------------------------------\n HashAggregate\n   Group Key: length((stringu1)::text)\n   ->  Seq Scan on tenk1\n(3 rows)\n"
+    }
+  ]
+}

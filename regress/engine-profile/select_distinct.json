@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "reason": "Distinct plans use engine hash or sorted uniqueness paths without PostgreSQL backend-worker Gather nodes; all SELECT values remain unchanged.",
+  "source_sha256": "9a519d1b1938cf04c181c2ab5b150c9b53fa21774421bacff5c4cc5a8936f83b",
+  "expected_sha256": "0869e80dfe3020d0711e79e73d6ee264dcfc9592f0e918607ee1890d42398d44",
+  "plans": [
+    {
+      "sql_sha256": "9364e145539edf219ef579ae5fd40326d7514b4b65d8107dca4fa6d9f098c207",
+      "occurrence": 1,
+      "sql_line": 125,
+      "before_sha256": "2da7042f623680726db55a35e1b669ff667c64812fe63b11875925f5332c00b6",
+      "after": "       QUERY PLAN        \n-------------------------\n HashAggregate\n   Group Key: four\n   ->  Seq Scan on tenk1\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "21b57f79d2e39856e5e11092f3940ad34730acb907d7c7bacea7b2b146eea51d",
+      "occurrence": 2,
+      "sql_line": 149,
+      "before_sha256": "ba0068b46d673305a632daa7e39800bfcffff6da0280d6345428b07b96977af0",
+      "after": "                        QUERY PLAN                        \n----------------------------------------------------------\n Unique\n   ->  Sort\n         Sort Key: (distinct_func(1))\n         ->  Index Only Scan using tenk1_hundred on tenk1\n(4 rows)\n"
+    },
+    {
+      "sql_sha256": "8e92773092e8d1102e366961bb5b9ebca91ee8ef85598da55ce066a9ff69e0ba",
+      "occurrence": 1,
+      "sql_line": 189,
+      "before_sha256": "446382121348a9a0133d03d2fb02e57e66e0dd5d1859469dd77a46beb7260141",
+      "after": "         QUERY PLAN          \n-----------------------------\n Limit\n   ->  Seq Scan on tenk1\n         Filter: (four = 10)\n(3 rows)\n"
+    },
+    {
+      "sql_sha256": "667a01218c0af5fbf7460ca690eba17419d52fc55e2c770c74c2f66da057ef1f",
+      "occurrence": 1,
+      "sql_line": 258,
+      "before_sha256": "be6102534cf7aed7ab3b19000b45e4e6bcef5eb02d699f1a62f3158720ef704c",
+      "after": "                               QUERY PLAN                               \n------------------------------------------------------------------------\n Limit\n   ->  Unique\n         ->  Index Only Scan using distinct_tbl_x_y_idx on distinct_tbl\n(3 rows)\n"
+    }
+  ]
+}

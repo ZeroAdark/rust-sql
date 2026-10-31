@@ -7,6 +7,8 @@ use gravity_ir::{IntBinOp, IntCond, Type, Value};
 
 use crate::frame::env::Env;
 
+mod validity;
+
 /// Slot `slot`'s validity in a record of layout `l`, offsets from the record's base (`Acc::Slot::valid`, the drain's
 /// cells): the validity bit when the layout has the word, a count's too (D271: abi's `Rec::fold`, the one merge of
 /// partial records, folds only a valid slot, and its `add_count` marks it; a count's class reads it as 0 when unset);
@@ -39,7 +41,7 @@ pub(crate) fn slot_ok(b: &mut FunctionBuilder<'_>, env: &Env, base: Value, v: Ce
             b.icmp(IntCond::Ne, w, env.zero)
         }
         CellValid::Bit { off, bit } => {
-            let byte = b.load_zext(Type::I8, base, off as i32);
+            let byte = validity::load(b, base, off as i32);
             let m = b.iconst(Type::I64, 1 << bit);
             let x = b.int_bin(IntBinOp::And, byte, m);
             b.icmp(IntCond::Ne, x, env.zero)
@@ -57,7 +59,7 @@ pub(crate) fn slot_ok(b: &mut FunctionBuilder<'_>, env: &Env, base: Value, v: Ce
 /// Marks the slot valid where `when` holds: a validity bit is set; every other form is implicit in the slot's words.
 pub(crate) fn mark(b: &mut FunctionBuilder<'_>, env: &Env, base: Value, v: CellValid, when: Value) {
     if let CellValid::Bit { off, bit } = v {
-        let byte = b.load_zext(Type::I8, base, off as i32);
+        let byte = validity::load(b, base, off as i32);
         let m = b.iconst(Type::I64, 1 << bit);
         let m = b.select(when, m, env.zero);
         let nb = b.int_bin(IntBinOp::Or, byte, m);

@@ -1,0 +1,48 @@
+{
+  "cluster": "/home/rustsql/checks/rust-sql-smoke-s1aiih0z",
+  "checks": [
+    "durability_settings",
+    "heap_aggregate",
+    "rollback",
+    "savepoint",
+    "plan_invalidation",
+    "columnar_aggregate",
+    "columnar_rollback",
+    "columnar_writes",
+    "concurrent_committed_updates",
+    "clean_restart",
+    "acknowledged_commit_survives_kill",
+    "columnar_survives_restart"
+  ],
+  "passed": true,
+  "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build 38634b4) on x86_64-unknown-linux-gnu, 64-bit",
+  "mixed": {
+    "seconds": 10.004734553999924,
+    "clients": 6,
+    "server_cpu_seconds": 29.23,
+    "server_pids": [
+      3875,
+      3877
+    ],
+    "sampled_peak_rss_sum_bytes": 352350208,
+    "committed_updates": 23740,
+    "errors": [],
+    "classes": {
+      "oltp": {
+        "operations": 94955,
+        "ops_per_second": 9491.006431753523,
+        "p50_ms": 0.24526499987587158,
+        "p95_ms": 1.0453959998812934,
+        "p99_ms": 1.3217439998243208
+      },
+      "olap": {
+        "operations": 20358,
+        "ops_per_second": 2034.836595625699,
+        "p50_ms": 0.9450070001548738,
+        "p95_ms": 1.2007000000266999,
+        "p99_ms": 1.4259349998155813
+      }
+    },
+    "cpu_seconds_per_operation": 0.0002534839957333518
+  }
+}

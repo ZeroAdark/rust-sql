@@ -26,4 +26,4 @@ simdutf8 = "0.1"
 # zstd links C (zstd-sys); no wasm32 build — the wasm arm refuses the codec
 # at the decompress call site, mirroring pgrcolumnar's arrangement.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-zstd = { version = "0.13", default-features = false }  # D4503: default features carry the pre-1.0 "legacy" frame decoders; every zstd dependent must keep them off
+zstd.workspace = true

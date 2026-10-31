@@ -1,0 +1,15 @@
+{
+  "decision": "rejected",
+  "promoted": false,
+  "production_qualified": false,
+  "candidate_sha256": "f7f033774c2c37157eb633045ff6bbc6f1956a96b370bcbae6e03e211abca220",
+  "accepted_sha256": "0be60915b40c9f70f39dcb3a0fd1f8918608a20095f767ec081a5b5320caa277",
+  "pressure_candidate_passes": 6,
+  "performance_preservation_passed": false,
+  "remaining": [
+    "SQL/isolation/protocol and recovery checks on this exact binary",
+    "positive-budget sort checks",
+    "PostgreSQL memory/read/update parity",
+    "broader production operational gates"
+  ]
+}

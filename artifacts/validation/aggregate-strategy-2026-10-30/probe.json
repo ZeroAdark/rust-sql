@@ -1,0 +1,942 @@
+{
+  "passed": true,
+  "engines": {
+    "native": {
+      "version": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+      "cluster": "/home/rustsql/conformance/compat-g35o0e5y",
+      "binary_sha256": "07b16e1aa4f0e2206c37b339b6e4cc813aa8ab9e3c5516334f753b3d90d0c536",
+      "data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+      "setup_lf_sha256": "1c5e005b488f306c41a349a55c768fe22a2882f0955ae8ae46d26d5baadcf7c3",
+      "source_sha256": "48fb78e1ee6539a8e6cb3392d0d740f1f6199d18af3321b6781c1415f6140772",
+      "checks": [
+        {
+          "name": "null_transition_full",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_transition_empty",
+          "sql": "SELECT balk(hundred) FROM tenk1 WHERE false",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Result"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_transition_null_only",
+          "sql": "SELECT balk(n) FROM (VALUES(NULL::int),(NULL::int)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_transition_signed_duplicates_and_nulls",
+          "sql": "SELECT balk(n) FROM (VALUES(-4),(NULL),(7),(NULL),(7)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_full",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              495000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_empty",
+          "sql": "SELECT balk(hundred) FROM tenk1 WHERE false",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Result"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_null_only",
+          "sql": "SELECT balk(n) FROM (VALUES(NULL::int),(NULL::int)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_signed_duplicates_and_nulls",
+          "sql": "SELECT balk(n) FROM (VALUES(-4),(NULL),(7),(NULL),(7)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              10
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_groups",
+          "sql": "SELECT hundred%7 AS g,balk(hundred) FROM tenk1 GROUP BY 1 ORDER BY 1",
+          "types": [
+            23,
+            20
+          ],
+          "values": [
+            [
+              0,
+              73500
+            ],
+            [
+              1,
+              75000
+            ],
+            [
+              2,
+              66500
+            ],
+            [
+              3,
+              67900
+            ],
+            [
+              4,
+              69300
+            ],
+            [
+              5,
+              70700
+            ],
+            [
+              6,
+              72100
+            ]
+          ],
+          "root_actual_rows": 7.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan",
+            "Sort"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_parallel_requested",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Finalize",
+            "Partial"
+          ],
+          "workers_launched": 4
+        },
+        {
+          "name": "valid_combiner_full_workers_0",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              495000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_groups_workers_0",
+          "sql": "SELECT hundred%7 AS g,balk(hundred) FROM tenk1 GROUP BY 1 ORDER BY 1",
+          "types": [
+            23,
+            20
+          ],
+          "values": [
+            [
+              0,
+              73500
+            ],
+            [
+              1,
+              75000
+            ],
+            [
+              2,
+              66500
+            ],
+            [
+              3,
+              67900
+            ],
+            [
+              4,
+              69300
+            ],
+            [
+              5,
+              70700
+            ],
+            [
+              6,
+              72100
+            ]
+          ],
+          "root_actual_rows": 7.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan",
+            "Sort"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_empty",
+          "sql": "SELECT balk(hundred) FROM tenk1 WHERE false",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Result"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_null_only",
+          "sql": "SELECT balk(n) FROM (VALUES(NULL::int),(NULL::int)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_signed_duplicates_and_nulls",
+          "sql": "SELECT balk(n) FROM (VALUES(-4),(NULL),(7),(NULL),(7)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              10
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_full_workers_4",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              495000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Finalize",
+            "Partial"
+          ],
+          "workers_launched": 4
+        },
+        {
+          "name": "valid_combiner_groups_workers_4",
+          "sql": "SELECT hundred%7 AS g,balk(hundred) FROM tenk1 GROUP BY 1 ORDER BY 1",
+          "types": [
+            23,
+            20
+          ],
+          "values": [
+            [
+              0,
+              73500
+            ],
+            [
+              1,
+              75000
+            ],
+            [
+              2,
+              66500
+            ],
+            [
+              3,
+              67900
+            ],
+            [
+              4,
+              69300
+            ],
+            [
+              5,
+              70700
+            ],
+            [
+              6,
+              72100
+            ]
+          ],
+          "root_actual_rows": 7.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Gather",
+            "Index Only Scan",
+            "Sort"
+          ],
+          "aggregate_partial_modes": [
+            "Finalize",
+            "Partial"
+          ],
+          "workers_launched": 4
+        }
+      ]
+    },
+    "candidate": {
+      "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build 0447a2b) on x86_64-unknown-linux-gnu, 64-bit",
+      "cluster": "/home/rustsql/conformance/compat-_1re4o7m",
+      "binary_sha256": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+      "data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+      "setup_lf_sha256": "1c5e005b488f306c41a349a55c768fe22a2882f0955ae8ae46d26d5baadcf7c3",
+      "source_sha256": "48fb78e1ee6539a8e6cb3392d0d740f1f6199d18af3321b6781c1415f6140772",
+      "checks": [
+        {
+          "name": "null_transition_full",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_transition_empty",
+          "sql": "SELECT balk(hundred) FROM tenk1 WHERE false",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Result"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_transition_null_only",
+          "sql": "SELECT balk(n) FROM (VALUES(NULL::int),(NULL::int)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_transition_signed_duplicates_and_nulls",
+          "sql": "SELECT balk(n) FROM (VALUES(-4),(NULL),(7),(NULL),(7)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              null
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_full",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              495000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_empty",
+          "sql": "SELECT balk(hundred) FROM tenk1 WHERE false",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Result"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_null_only",
+          "sql": "SELECT balk(n) FROM (VALUES(NULL::int),(NULL::int)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_signed_duplicates_and_nulls",
+          "sql": "SELECT balk(n) FROM (VALUES(-4),(NULL),(7),(NULL),(7)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              10
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_serial_groups",
+          "sql": "SELECT hundred%7 AS g,balk(hundred) FROM tenk1 GROUP BY 1 ORDER BY 1",
+          "types": [
+            23,
+            20
+          ],
+          "values": [
+            [
+              0,
+              73500
+            ],
+            [
+              1,
+              75000
+            ],
+            [
+              2,
+              66500
+            ],
+            [
+              3,
+              67900
+            ],
+            [
+              4,
+              69300
+            ],
+            [
+              5,
+              70700
+            ],
+            [
+              6,
+              72100
+            ]
+          ],
+          "root_actual_rows": 7.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan",
+            "Sort"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "null_combiner_parallel_requested",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              495000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_full_workers_0",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              495000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_groups_workers_0",
+          "sql": "SELECT hundred%7 AS g,balk(hundred) FROM tenk1 GROUP BY 1 ORDER BY 1",
+          "types": [
+            23,
+            20
+          ],
+          "values": [
+            [
+              0,
+              73500
+            ],
+            [
+              1,
+              75000
+            ],
+            [
+              2,
+              66500
+            ],
+            [
+              3,
+              67900
+            ],
+            [
+              4,
+              69300
+            ],
+            [
+              5,
+              70700
+            ],
+            [
+              6,
+              72100
+            ]
+          ],
+          "root_actual_rows": 7.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan",
+            "Sort"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_empty",
+          "sql": "SELECT balk(hundred) FROM tenk1 WHERE false",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Result"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_null_only",
+          "sql": "SELECT balk(n) FROM (VALUES(NULL::int),(NULL::int)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              0
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_signed_duplicates_and_nulls",
+          "sql": "SELECT balk(n) FROM (VALUES(-4),(NULL),(7),(NULL),(7)) v(n)",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              10
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Values Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_full_workers_4",
+          "sql": "SELECT balk(hundred) FROM tenk1;",
+          "types": [
+            20
+          ],
+          "values": [
+            [
+              495000
+            ]
+          ],
+          "root_actual_rows": 1.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        },
+        {
+          "name": "valid_combiner_groups_workers_4",
+          "sql": "SELECT hundred%7 AS g,balk(hundred) FROM tenk1 GROUP BY 1 ORDER BY 1",
+          "types": [
+            23,
+            20
+          ],
+          "values": [
+            [
+              0,
+              73500
+            ],
+            [
+              1,
+              75000
+            ],
+            [
+              2,
+              66500
+            ],
+            [
+              3,
+              67900
+            ],
+            [
+              4,
+              69300
+            ],
+            [
+              5,
+              70700
+            ],
+            [
+              6,
+              72100
+            ]
+          ],
+          "root_actual_rows": 7.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Aggregate",
+            "Index Only Scan",
+            "Sort"
+          ],
+          "aggregate_partial_modes": [
+            "Simple"
+          ],
+          "workers_launched": 0
+        }
+      ]
+    }
+  },
+  "full_report_archive_member": "probe/report.json"
+}

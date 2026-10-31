@@ -1,0 +1,83 @@
+{
+  "passed": false,
+  "seed": 29102026,
+  "rounds": 3,
+  "servers": {
+    "postgresql": {
+      "cluster": "/home/rustsql/conformance/compat-qpmfv3gm",
+      "version": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+      "checks": 216,
+      "failures": [
+        {
+          "seed": 29102026,
+          "frame": "ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING EXCLUDE TIES",
+          "error": "row (64, 1, 1, -2, 7): expected (0, 0, None, 0, 1, 1, [0], [0]), got (0, None, None, 0, 1, 1, [0], [0])"
+        },
+        {
+          "seed": 29102026,
+          "frame": "ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING EXCLUDE TIES",
+          "error": "row (49, 1, 0, 2, 4): expected (None, -2, -2, -2, 1, 2, [None, -2], [-2]), got (None, -2, None, -2, 1, 2, [None, -2], [-2])"
+        },
+        {
+          "seed": 29102027,
+          "frame": "ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING EXCLUDE TIES",
+          "error": "row (71, 2, 1, 5, 6): expected (-6, -6, None, -6, 1, 1, [-6], [-6]), got (-6, None, None, -6, 1, 1, [-6], [-6])"
+        },
+        {
+          "seed": 29102027,
+          "frame": "ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING EXCLUDE TIES",
+          "error": "row (35, 2, 0, None, 2): expected (1, 1, None, 1, 1, 1, [1], [1]), got (None, 1, 1, 1, 1, 1, [1], [1])"
+        },
+        {
+          "seed": 29102028,
+          "frame": "ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING EXCLUDE TIES",
+          "error": "row (78, 0, 1, -7, 6): expected (-7, -7, None, -7, 1, 1, [-7], [-7]), got (-7, None, None, -7, 1, 1, [-7], [-7])"
+        },
+        {
+          "seed": 29102028,
+          "frame": "ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING EXCLUDE TIES",
+          "error": "row (63, 0, 0, -3, 2): expected (8, 8, None, 8, 1, 1, [8], [8]), got (None, 8, 8, 8, 1, 1, [8], [8])"
+        }
+      ],
+      "passed": 210
+    },
+    "candidate": {
+      "cluster": "/home/rustsql/conformance/compat-9jgdd9sn",
+      "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build bbd3374) on x86_64-unknown-linux-gnu, 64-bit",
+      "checks": 216,
+      "failures": [
+        {
+          "seed": 29102026,
+          "frame": "ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING EXCLUDE TIES",
+          "error": "row (85, 1, 1, None, 7): expected (6, 6, None, 6, 1, 1, [6], [6]), got (6, None, None, 6, 1, 1, [6], [6])"
+        },
+        {
+          "seed": 29102026,
+          "frame": "ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING EXCLUDE TIES",
+          "error": "row (28, 1, 0, 0, 3): expected (-4, -4, None, -4, 1, 1, [-4], [-4]), got (None, -4, -4, -4, 1, 1, [-4], [-4])"
+        },
+        {
+          "seed": 29102027,
+          "frame": "ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING EXCLUDE TIES",
+          "error": "row (65, 2, 2, None, 11): expected (7, 7, None, 7, 1, 1, [7], [7]), got (7, None, None, 7, 1, 1, [7], [7])"
+        },
+        {
+          "seed": 29102027,
+          "frame": "ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING EXCLUDE TIES",
+          "error": "row (98, 2, 0, -6, 2): expected (5, 5, None, 5, 1, 1, [5], [5]), got (None, 5, 5, 5, 1, 1, [5], [5])"
+        },
+        {
+          "seed": 29102028,
+          "frame": "ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING EXCLUDE TIES",
+          "error": "row (15, 0, 1, None, 6): expected (-3, -3, None, -3, 1, 1, [-3], [-3]), got (-3, None, None, -3, 1, 1, [-3], [-3])"
+        },
+        {
+          "seed": 29102028,
+          "frame": "ROWS BETWEEN 1 FOLLOWING AND 3 FOLLOWING EXCLUDE TIES",
+          "error": "row (21, 0, 0, -7, 2): expected (-7, -7, None, -7, 1, 1, [-7], [-7]), got (None, -7, -7, -7, 1, 1, [-7], [-7])"
+        }
+      ],
+      "passed": 210
+    }
+  }
+}

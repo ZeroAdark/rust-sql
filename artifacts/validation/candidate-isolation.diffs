@@ -1,0 +1,19 @@
+diff -U3 /home/rustsql/postgres-reference-build/src/test/isolation/expected/deadlock-parallel.out /home/rustsql/checks/rust-sql-smoke-fpbibss8/isolation/results/deadlock-parallel.out
+--- /home/rustsql/postgres-reference-build/src/test/isolation/expected/deadlock-parallel.out	2026-10-29 14:58:41.760360055 -0400
++++ /home/rustsql/checks/rust-sql-smoke-fpbibss8/isolation/results/deadlock-parallel.out	2026-10-29 15:21:15.433278264 -0400
+@@ -46,6 +46,7 @@
+         1
+ (1 row)
+ 
++step e1c: COMMIT;
+ step d2a1: <... completed>
+   sum
+ -----
+@@ -57,7 +58,6 @@
+          1
+ (1 row)
+ 
+-step e1c: COMMIT;
+ step d2c: COMMIT;
+ step e2l: <... completed>
+ lock_excl

@@ -41,9 +41,9 @@ pub fn fold_name(name: &str) -> String {
     // each >=0x80 continuation byte as a U+0080..U+00FF code point and re-encoded
     // it, so the folded insert key diverged from find_index's raw lookup for
     // legal non-ASCII custom GUC names — every SET leaked a fresh placeholder.
-    name.chars()
-        .map(|c| if c.is_ascii() { c.to_ascii_lowercase() } else { c })
-        .collect()
+    // ASCII case folding preserves the byte length, so allocate once instead of
+    // growing a String from the character iterator's conservative size hint.
+    name.to_ascii_lowercase()
 }
 
 pub fn convert_guc_name_for_parameter_acl(name: &str) -> String {

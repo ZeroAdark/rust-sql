@@ -1,0 +1,108 @@
+{
+  "source_parent": "3594c736fd141d37333c16d039a050fcfed386a2",
+  "source_file": "crates/gravity/lowerv4/src/ops/hashjoin/strategies/rowfilter.rs",
+  "source_sha256": "6ed4f6afeeeda724dc030e630d2468449dc950ac7ed1631bdb5429dbfbba3892",
+  "runtime_prefix_unchanged": true,
+  "runtime_prefix_sha256": "1385bb44c39897e8dcbccd0beba1576ac87da5702ab581bd89644cedf212525a",
+  "failing_ci_job": "https://github.com/ZeroAdark/rust-sql/actions/runs/41143939482/job/124364487458",
+  "failing_ci_false_positive_rate": 0.067485,
+  "fixed_budget_reproduction": {
+    "purpose": "deterministic reproduction of the CI test budget assumption; not an independent correctness oracle",
+    "ci_job": 124364487458,
+    "rows": [
+      {
+        "set": "sequential",
+        "build_keys": 200000,
+        "word_bits": 15,
+        "bits_per_key": 10.48576,
+        "false_positive_rate": 0.0070975,
+        "test_bound": 0.04
+      },
+      {
+        "set": "stride32",
+        "build_keys": 200000,
+        "word_bits": 15,
+        "bits_per_key": 10.48576,
+        "false_positive_rate": 0.0099175,
+        "test_bound": 0.04
+      },
+      {
+        "set": "scattered",
+        "build_keys": 200000,
+        "word_bits": 15,
+        "bits_per_key": 10.48576,
+        "false_positive_rate": 0.01621,
+        "test_bound": 0.04
+      },
+      {
+        "set": "sequential",
+        "build_keys": 200000,
+        "word_bits": 14,
+        "bits_per_key": 5.24288,
+        "false_positive_rate": 0.067485,
+        "test_bound": 0.1
+      },
+      {
+        "set": "stride32",
+        "build_keys": 200000,
+        "word_bits": 14,
+        "bits_per_key": 5.24288,
+        "false_positive_rate": 0.0844625,
+        "test_bound": 0.1
+      },
+      {
+        "set": "scattered",
+        "build_keys": 200000,
+        "word_bits": 14,
+        "bits_per_key": 5.24288,
+        "false_positive_rate": 0.0948325,
+        "test_bound": 0.1
+      },
+      {
+        "set": "sequential",
+        "build_keys": 262144,
+        "word_bits": 14,
+        "bits_per_key": 4.0,
+        "false_positive_rate": 0.1462575,
+        "test_bound": 0.25
+      },
+      {
+        "set": "stride32",
+        "build_keys": 262144,
+        "word_bits": 14,
+        "bits_per_key": 4.0,
+        "false_positive_rate": 0.16996,
+        "test_bound": 0.25
+      },
+      {
+        "set": "scattered",
+        "build_keys": 262144,
+        "word_bits": 14,
+        "bits_per_key": 4.0,
+        "false_positive_rate": 0.173795,
+        "test_bound": 0.25
+      }
+    ]
+  },
+  "full_suite": {
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "-j",
+      "2",
+      "-p",
+      "gravity_lowerv4",
+      "--lib"
+    ],
+    "exit": 0
+  },
+  "passed": 642,
+  "failed": 0,
+  "ignored": 0,
+  "stack_kib": 65520,
+  "log_sha256": "77c4cb30ab333f9e8d0cc311d2c0c114e7b9f2ce317cf91386787290c07d0e5d",
+  "compressed_log_sha256": "f6f17fe9a6e65f807245dabbd7504ac8f7fdbffb53b8cfbf4811069d71aa07e3",
+  "production_qualified": false
+}

@@ -675,6 +675,7 @@ fn dispatch_message<'mcx>(
             backend_status_seams::pgstat_report_activity::call(BackendState::STATE_FASTPATH, None);
             ps_status_seams::set_ps_display::call("<FASTPATH>");
 
+            let _admission = crate::admission::acquire_for_statement(|| false)?;
             simple_query::start_xact_command()?;
 
             let call = fastpath::HandleFunctionRequest(mcx, input_message)?;
@@ -985,6 +986,10 @@ fn postgres_main_inner(dbname: &str, username: &str) -> PgResult<()> {
         catcache::SetCatCacheTrimAtIdle(true);
         relcache::SetRelationCacheTrimAtIdle(true);
     }
+
+    // Share setup allocations before the first command. Later handoffs use the existing idle timer, so busy
+    // sessions keep local current runs instead of transferring their ownership after every command.
+    pagepool::idle_point();
 
     let mut state = LoopState {
         send_ready_for_query: true,

@@ -1,0 +1,27 @@
+{
+  "runtime_source_commit": "faf62fc4a544b2d033d812b9728b54ecfcf390ad",
+  "binary_sha256": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+  "archive_sha256": "d72a4fac4ecc39f95ce604fe2783f299855d3c9427ecfecffcf96cffcd6a0479",
+  "archive_bytes": 1362332,
+  "evidence_sha256": {
+    "auth-tls.json": "6448930d4d2d6fb0fce121e46b3da3e8cbad20d1d0e7242920ae75bc9be43339",
+    "repeat-suites.json": "a9f887a60b34ed7d944ac73acfa2e1d892d381097c8df9fcdc6de05438dd42db",
+    "comparator-tests.log": "41e833adeedfe11b7fb2fc3b3bdfb82c705c959409ebded2190ea57b05667d50",
+    "engine-first.json": "a8961b531297bcfc9e3fa53a5ee744e1b60fc1b8abcde1a89e8e2d33083af5b5",
+    "engine-repeat.json": "1ab2da186eb76318cd10f026f0f02bcbc5880e933c12db2785b8a9dbf0d19f1e"
+  },
+  "validation_source_lf_sha256": {
+    "scripts/validation/auth_tls_probe.py": "06443b2675357be7e5e998a030034c415d546f41e67cc8dd3385558a843d2c7d",
+    "scripts/validation/engine_regression_profile.py": "2719920dca2f6aeae2587b8cea10603bfc9a7553dc641df3544aab88e0e7bb2a",
+    "scripts/validation/engine_regression_audit.py": "e9ea85b44a564f82ba58dfd70222956d9bb61176ad99f28ef7799a31a8f6d851",
+    "regress/engine-profile/collate.icu.utf8.json": "e93c30374967c94767ff984b9d752302e3e94bc0af27421552320ea9ec3962ed",
+    "regress/engine-profile/generated_virtual.json": "8be3a27ed8a606c891a0ea65054fbcfedf1702820adf59b730ddf5f61dcb8d01",
+    "regress/engine-profile/join.json": "6e81586c0f7cef0c8254e19100bd0a25d0b2a76e74c646f8c50216e25513238c",
+    "regress/engine-profile/partition_aggregate.json": "204f9a66cdb003eb83b9e6a1a0ff761b22df030401d29269295e42de61fce1f1",
+    "regress/engine-profile/partition_join.json": "52bc22e14502e0cefd3a6c7a3c2ed69aa6427a44417487a8c1031373ddadc312",
+    "regress/engine-profile/plpgsql.json": "c999180965b77b64555f66e0bde449b90cb596d649b133a366afaf0440586e82",
+    "regress/engine-profile/portals.json": "0f4807d06a38c76fda506f27b3b5c8e34cf67edbadca2821826e4ce428f83b56",
+    "regress/engine-profile/select_distinct.json": "27db11c8dd98dace732db0f70fc1a001bcf0df58aae3053ceb49b1716d806c7f",
+    "regress/engine-profile/write_parallel.json": "3992f09f7ff44753e5e471824c2be0280cbdf457c2ce8e81bd48aea71559ff28"
+  }
+}

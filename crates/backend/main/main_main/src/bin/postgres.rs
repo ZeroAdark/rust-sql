@@ -470,6 +470,7 @@ extern "C" fn tune_allocator() {
             K::PoolChunk,
             K::PoolShelfMax,
             K::PoolWarmZero,
+            K::PoolWarmZeroMax,
             K::PoolWarmCap,
             K::PoolDecayMs,
             K::PoolPurgeBatch,
@@ -482,6 +483,7 @@ extern "C" fn tune_allocator() {
             K::PoolLazyCap,
             K::PoolAgePassMax,
             K::PoolThpPartial,
+            K::PoolHostAgeMs,
         ] {
             if let Some(v) = mempolicy_knob_u64(policy, KNOBS[k as usize].name.as_bytes()) {
                 set(k, v);
@@ -967,6 +969,41 @@ mod tests {
         assert_eq!(super::mempolicy_knob_u64(b"pool_block_min=1k", k), None);
         assert_eq!(super::mempolicy_knob_u64(b"pool_block_min=99999999999999999999999", k), None);
         assert_eq!(mempolicy::consts::KNOBS[mempolicy::consts::K::PoolBlockMin as usize].name, "pool_block_min");
+    }
+
+    /// Exercise the real allocator constructor in a fresh process. Applying these values at
+    /// postmaster startup is too late: the pool has already copied its immutable configuration.
+    #[test]
+    fn allocator_constructor_honors_warm_limit_and_host_age() {
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("PGRUST_") {
+                child.env_remove(key);
+            }
+        }
+        let output = child
+            .args(["--ignored", "--exact", "tests::allocator_constructor_configuration_child", "--test-threads=1"])
+            .env("RUSTSQL_ALLOCATOR_CONFIG_CHILD", "1")
+            .env("PGRUST_ALLOCATOR", "hearth")
+            .env("PGRUST_POOL_MCX", "1")
+            .env("PGRUST_MEMPOLICY", "pool_warm_zero=4194304,pool_warm_zero_max=8388608,pool_host_age_ms=5")
+            .output()
+            .expect("start constructor probe");
+        assert!(output.status.success(), "constructor probe failed: {}{}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    #[ignore = "invoked in a fresh process by allocator_constructor_honors_warm_limit_and_host_age"]
+    fn allocator_constructor_configuration_child() {
+        assert_eq!(std::env::var("RUSTSQL_ALLOCATOR_CONFIG_CHILD").as_deref(), Ok("1"));
+        use mempolicy::consts::{get, source, K, Source};
+        assert_eq!(get(K::PoolWarmZeroMax), 8 << 20);
+        assert_eq!(get(K::PoolHostAgeMs), 5);
+        assert_eq!(source(K::PoolWarmZeroMax), Source::Set);
+        assert_eq!(source(K::PoolHostAgeMs), Source::Set);
+        assert!(pagepool::on(), "the real constructor enabled the pool");
+        assert!(pagepool::stats().warm_target <= 8 << 20, "the initialized pool respects the maximum");
     }
 
     /// pagepool P2 (ppgrav's find): a pool switched on by another consumer (PGRUST_POOL_GRAVITY=1, MCX unset) gets the

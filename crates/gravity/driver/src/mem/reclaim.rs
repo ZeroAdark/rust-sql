@@ -626,11 +626,12 @@ fn settle(freed: u64) -> u64 {
         // them measured (its own remaps); any other thread, pg:memwatchdog included, only asks the purger: those bytes
         // are landing (`reap::landing_credit`), never room. Never in give_back_caches: an idle pool stays warm.
         if pagepool::on() || pagepool::global_on() {
-            let _ = pagepool::flush_remote();
             pagepool::flush_shelf();
             if memledger::ladder_pass::on_ladder_thread() {
+                // The synchronous release sweeps small-run handoffs before computing releasable bytes.
                 let _ = pagepool::return_warm_now(usize::try_from(freed).unwrap_or(usize::MAX));
             } else {
+                let _ = pagepool::flush_remote();
                 let _ = pagepool::return_warm();
             }
         }

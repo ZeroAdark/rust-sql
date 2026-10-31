@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "case": "aggregates",
+  "source_sha256": "48fb78e1ee6539a8e6cb3392d0d740f1f6199d18af3321b6781c1415f6140772",
+  "expected_sha256": "a713790e44d75a57599fda32b5ee5465934e8ca5d82ea04b86ac1df18544df6e",
+  "data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+  "setup_lf_sha256": "1c5e005b488f306c41a349a55c768fe22a2882f0955ae8ae46d26d5baadcf7c3",
+  "sql": "SELECT balk(hundred) FROM tenk1;",
+  "sql_line": 1457,
+  "occurrence": 2,
+  "explain": "EXPLAIN (COSTS OFF) SELECT balk(hundred) FROM tenk1;",
+  "reason": "The fixture deliberately combines sum states into NULL, violating the partial-aggregation equivalence contract. Only its source-bound serial sum, derived from the pinned input, is accepted with a serial Aggregate plan. The first NULL-returning transition aggregate stays exact.",
+  "contract": "https://www.postgresql.org/docs/18/sql-createaggregate.html"
+}

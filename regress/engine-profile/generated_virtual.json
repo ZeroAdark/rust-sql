@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "reason": "Grouping sets use separate append branches, including statically false HAVING branches; projected SQL results remain unchanged.",
+  "source_sha256": "367df1947d6542f4cebf6a6d1d21d8de937b955e9b2c0e73facdee059110515b",
+  "expected_sha256": "996ed60b634764ed3984268e36effb0453e611d70f5061db6cef4e767fcf5540",
+  "plans": [
+    {
+      "sql_sha256": "b58f389a89940a97848a5c61444c29d82a1c12c80f30f894b62af8fcb8e21db1",
+      "occurrence": 1,
+      "sql_line": 909,
+      "before_sha256": "941cd968e96994e4d8e676f0731f7823318ecd418ee1cb96b59e20f11d2f1e69",
+      "after": "                                           QUERY PLAN                                           \n------------------------------------------------------------------------------------------------\n Append\n   ->  HashAggregate\n         Output: a, NULL::integer, NULL::integer, NULL::integer, NULL::integer\n         Group Key: a\n         ->  Result\n               Output: a\n               One-Time Filter: false\n   ->  HashAggregate\n         Output: NULL::integer, ((a * 2)), NULL::integer, NULL::integer, NULL::integer\n         Group Key: (a * 2)\n         ->  Result\n               Output: (a * 2)\n               One-Time Filter: false\n   ->  Group\n         Output: NULL::integer, NULL::integer, 20, NULL::integer, NULL::integer\n         ->  Seq Scan on generated_virtual_tests.gtest32 t\n               Output: t.a, t.b, t.c, t.d, t.e\n   ->  HashAggregate\n         Output: NULL::integer, NULL::integer, NULL::integer, (COALESCE(a, 100)), NULL::integer\n         Group Key: COALESCE(a, 100)\n         ->  Result\n               Output: COALESCE(a, 100)\n               One-Time Filter: false\n   ->  HashAggregate\n         Output: NULL::integer, NULL::integer, NULL::integer, NULL::integer, e\n         Group Key: e\n         ->  Result\n               Output: e\n               One-Time Filter: false\n(29 rows)\n"
+    }
+  ]
+}

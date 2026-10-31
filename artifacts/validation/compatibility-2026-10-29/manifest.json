@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-29",
+  "target": "x86_64-unknown-linux-gnu",
+  "base_commit": "bbd3374c1d3464ac85cbe3863b261918b9d4036d",
+  "working_tree_patch": true,
+  "build": "cargo build --release --locked -j 4 -p main_main -p initdb",
+  "postgres_sha256": "9546e43d73645ae0505fef9b8dec7faf9cb9172226c5eb43d8034a9a10af9c2b",
+  "initdb_sha256": "0ca743d3122a4220f87ec0473d81e714e50ff71927ffc2cb65b3da630f8cddf0",
+  "production_input_sha256": {
+    "Cargo.toml": "977f04b78c68065f69936b5d5bf7c7c37f943f06ff1736ee82bd02831565da0d",
+    "crates/backend/access/parquet_read/Cargo.toml": "a4d258f36f4b04d862fea864c41e12c20f903d3a68211b09b19ee2eab090f75a",
+    "crates/gravity/exec/src/admit/entry/instrument.rs": "0caec43a6bc1ba2656ba7deef2815c0fe2306ae8ffcef75810851a2adbc386a3",
+    "Cargo.lock": "63cf85b917b851659e11c60185f9d0b38162c2086b8d6513a0abe349e3437a1c",
+    "crates/gravity/hosts/Cargo.toml": "99aa8b91c985bcab3aeec590b0fc2c17ae255b4ffb6f72f2dbb049f2e04ba47c",
+    "crates/gravity/hosts_rig/Cargo.toml": "cc9baf3eec18bfc5540bea51d5d073b9d9684548fc81524e2c84d9cb5e50a4f6",
+    "crates/backend/backup/compress/Cargo.toml": "8173e9deca1f82c5c1f87f448b190c0e28071ee3d5a51865ab4970ad4fc67e3a",
+    "crates/backend/access/transam/xlogreader/Cargo.toml": "e51f55758b4d9ea61ac20f773f153d331edbb87025d152d725fe0188df5d9850",
+    "crates/gravity/expr/Cargo.toml": "1718bb471d82fc367dd4232a6be8c612ea98dff7fbcb3bd30f4a068b7b4a563f",
+    "crates/gravity/backend/wasm/Cargo.toml": "d54a2c9c83762250f68aa6608bbb14f2f6e5163553ffb2641b2efbd3e113cd11",
+    "crates/backend/access/transam/xloginsert/Cargo.toml": "2fb3838fa327782dbc10e5ec326c6e0cbb8daa5fdf60c6aa259b1a3dd3388324",
+    "crates/common/compression/Cargo.toml": "db7b7521e6471b1b968544b8c32afb7e68c6552a8e6e093c5d710a2cbe5bb952",
+    "crates/backend/access/pgrcolumnar/pgrc_codec/Cargo.toml": "00b9cf4e1aa0038e17ed18e8d56d59e89e17a1b3ba347b0f6cabf1c7ebb803cc",
+    "crates/gravity/hosts_it/Cargo.toml": "8d6f8f6fe1a6fa18b2b578e650139c58200a5c47105076987f7682bbf996ccea"
+  },
+  "postgres_reference_version": "18.6",
+  "raw_regression": {
+    "total": 231,
+    "normalized": false,
+    "passed": 204
+  },
+  "isolation": {
+    "total": 510,
+    "passed": 510,
+    "profile": "existing upstream engine overlay plus extra schedule"
+  },
+  "differential_checks": 88,
+  "recovery_cycles": 10,
+  "rustsec_vulnerabilities": 0,
+  "rustsec_warnings": 0
+}

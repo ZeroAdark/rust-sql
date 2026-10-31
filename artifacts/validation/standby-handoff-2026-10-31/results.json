@@ -1,0 +1,138 @@
+{
+  "performance": {
+    "standby-medium-20261030": {
+      "timed_performance_valid": true,
+      "invalid_timed_trials": {},
+      "timed": {
+        "phase": "medium",
+        "trials": 15,
+        "engines": {
+          "postgresql": {
+            "cpu_ms_per_bundle": 228.71192222222223,
+            "sql_per_second": 178.73566385659575,
+            "charged_peak_mib": 223.87109375,
+            "pss_peak_mib": 92.8291015625,
+            "read_p99_ms": 0.465679,
+            "update_p99_ms": 1.248687,
+            "aggregate_p99_ms": 34.82651,
+            "range_p99_ms": 15.238966,
+            "join_p99_ms": 49.845777,
+            "bundle_p99_ms": 102.332796
+          },
+          "rustsql-baseline": {
+            "cpu_ms_per_bundle": 19.287905555555557,
+            "sql_per_second": 179.37890025575263,
+            "charged_peak_mib": 488.69140625,
+            "pss_peak_mib": 514.3056640625,
+            "read_p99_ms": 0.633674,
+            "update_p99_ms": 1.480855,
+            "aggregate_p99_ms": 5.751958,
+            "range_p99_ms": 1.394368,
+            "join_p99_ms": 7.288844,
+            "bundle_p99_ms": 21.078356
+          },
+          "rustsql": {
+            "cpu_ms_per_bundle": 19.921677777777777,
+            "sql_per_second": 179.38965747935666,
+            "charged_peak_mib": 461.66796875,
+            "pss_peak_mib": 489.03125,
+            "read_p99_ms": 0.661565,
+            "update_p99_ms": 1.534319,
+            "aggregate_p99_ms": 5.974013,
+            "range_p99_ms": 1.518078,
+            "join_p99_ms": 7.125811,
+            "bundle_p99_ms": 21.812294
+          }
+        },
+        "candidate_change_percent": {
+          "cpu_ms_per_bundle": 3.285852994233851,
+          "sql_per_second": 0.005996928060492124,
+          "charged_peak_mib": -5.529755005795134,
+          "pss_peak_mib": -4.914278770110647,
+          "read_p99_ms": 4.4014745752547935,
+          "update_p99_ms": 3.6103467253714827,
+          "aggregate_p99_ms": 3.860511498866992,
+          "range_p99_ms": 8.872119842107672,
+          "join_p99_ms": -2.236747006795592,
+          "bundle_p99_ms": 3.481950869413164
+        },
+        "preservation_failures": [
+          "range_p99_ms"
+        ]
+      },
+      "warmup_and_measurement_cpu": {
+        "baseline_cpu_us": [
+          4657803,
+          4520123,
+          4681065,
+          4705191,
+          4669122
+        ],
+        "candidate_cpu_us": [
+          4810506,
+          4778912,
+          4807992,
+          4951464,
+          4469628
+        ],
+        "median_change_pct": 2.9742208492303357,
+        "paired_change_pct": [
+          3.2784340600064077,
+          5.725264555853893,
+          2.7114983449279206,
+          5.234070200338303,
+          -4.272623418278643
+        ],
+        "throttled_trials": [
+          {
+            "engine": "postgresql",
+            "repetition": 1,
+            "nr_throttled": 7,
+            "throttled_usec": 25036
+          }
+        ],
+        "rust_comparison_valid": true
+      },
+      "setup_warmup_and_measurement_cpu": {
+        "baseline_cpu_us": [
+          5259076,
+          5124083,
+          5343537,
+          5399966,
+          5290853
+        ],
+        "candidate_cpu_us": [
+          5458866,
+          5429209,
+          5371155,
+          5648257,
+          5062007
+        ],
+        "median_change_pct": 2.615003667650573,
+        "paired_change_pct": [
+          3.7989563185624187,
+          5.954743512156213,
+          0.5168486715821485,
+          4.598010431917543,
+          -4.3253138955098525
+        ],
+        "throttled_trials": [
+          {
+            "engine": "postgresql",
+            "repetition": 1,
+            "nr_throttled": 7,
+            "throttled_usec": 25036
+          }
+        ],
+        "rust_comparison_valid": true
+      }
+    }
+  },
+  "correctness": {
+    "allocator_tests": 5,
+    "worker_retirement_tests": 2,
+    "parallel_index_builds": 6,
+    "protocol_groups_per_engine": 8,
+    "selected": false
+  }
+}

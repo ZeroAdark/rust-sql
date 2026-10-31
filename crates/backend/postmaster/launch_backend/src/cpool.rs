@@ -60,8 +60,6 @@ impl GucPrelude {
     /// A new registry from the boot values and the base, as the spawn closure builds it: every option's backing is
     /// rewritten (a boot value or the base's), so no SET of the previous session survives.
     fn apply(&self) -> types_error::PgResult<()> {
-        // step 2 (a): the registry template, while backend_thread_reuse_keep is on
-        guc::store::set_share_builtin_index(keep());
         if guc::layers::base_share_enabled() {
             guc::store::initialize_guc_options_for_child_base(&self.base)
                 .and_then(|()| guc::layers::bind_base(&self.base))

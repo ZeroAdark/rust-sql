@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "reason": "Eight source-bound EXPLAIN helpers retain measured root and MERGE action counts. A separate linear witness proves the one unordered MERGE trace against pinned inputs, preserving all actions, old/new values, trigger phases and consistent row order.",
+  "source_sha256": "3e17d4d53b10d967eeb6698dcf2d83e8f6d1551fc1b00782b8056313bc59a0d2",
+  "expected_sha256": "98f96314fcdd5ffbda52a8d5254b120a06e47281aa5cac3d7531b542bc5a98f5",
+  "plans": [
+    {
+      "sql_sha256": "04476dcb7d6bb193f19b7b732c4406bd662f99c2425629b99991ed05dd1398f0",
+      "occurrence": 1,
+      "sql_line": 1087,
+      "kind": "merge_plan",
+      "before_sha256": "5a013b7e72a78bfd0869ca135b7d5fa29414b672ce72f52e0d2699568a4f46be",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   Tuples: updated=50\n   ->  Merge Join (actual rows=50.00 loops=1)\n         Merge Cond: (t.a = s.a)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "56112593603798e1752a32a263eb80da09ee1a9769eb210f9875a55d52417a51",
+      "occurrence": 1,
+      "sql_line": 1093,
+      "kind": "merge_plan",
+      "before_sha256": "e21993f5739d97b9c0f278d85fe026f2ddaf20f5e31f4e3e725855c68e0ae70b",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   Tuples: updated=5 skipped=45\n   ->  Merge Join (actual rows=50.00 loops=1)\n         Merge Cond: (t.a = s.a)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "81b1e64f1d19fa2ed56cfde967d8b0390c9dcf820e6de68b1df8b3cddb21911f",
+      "occurrence": 1,
+      "sql_line": 1099,
+      "kind": "merge_plan",
+      "before_sha256": "fe4510d811bb50960ed8237037b73b417c5d1aa537f939a42fad8d679f7cd4f4",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   Tuples: updated=5 deleted=5 skipped=40\n   ->  Merge Join (actual rows=50.00 loops=1)\n         Merge Cond: (t.a = s.a)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "9ac216b6a575187424a557325dbd9d7578f1c222ae20c754043dbd4d78808659",
+      "occurrence": 1,
+      "sql_line": 1107,
+      "kind": "merge_plan",
+      "before_sha256": "bfc8bdbf5638dd2a96f1659457c0000d34428c7b4e41331e62a2af02731476a2",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   Tuples: inserted=4 skipped=96\n   ->  Merge Left Join (actual rows=100.00 loops=1)\n         Merge Cond: (s.a = t.a)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "abe9097d9e90e03ecff5454c7b9cf7e447693f53996164a51fbd582b932ff823",
+      "occurrence": 1,
+      "sql_line": 1113,
+      "kind": "merge_plan",
+      "before_sha256": "3f42a76a26c0c8103bddf4fa8de099dbed058a49b0786ed1013acbf1643dc847",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   Tuples: inserted=10 updated=9 deleted=5 skipped=76\n   ->  Merge Left Join (actual rows=100.00 loops=1)\n         Merge Cond: (s.a = t.a)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "925a1589cdacc2fd747d6dabc620e82bd8500513dabcaf4a27a0eb351f404abd",
+      "occurrence": 1,
+      "sql_line": 1123,
+      "kind": "merge_plan",
+      "before_sha256": "7ad5e1c023c2d44aa5afff05fa1ef9f7fb8cdb43a5ffda106fc7a5bac729f8e1",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   Tuples: skipped=54\n   ->  Merge Left Join (actual rows=54.00 loops=1)\n         Merge Cond: (t.a = s.a)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "847861e053e13dd14a6640624b16b7e998b27e3ad229a1c790e3a678b86db554",
+      "occurrence": 1,
+      "sql_line": 1129,
+      "kind": "merge_plan",
+      "before_sha256": "99b880f91910edd3de6fbe07c331f0ac6da98a65a1c58e688e1a0b2cc64e519c",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   Tuples: skipped=100\n   ->  Merge Full Join (actual rows=100.00 loops=1)\n         Merge Cond: (t.a = s.a)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "5173854976b8a6e3d0a79f016e2f0f37ecdf1aaf4912df776ea95d81ae4ee2e0",
+      "occurrence": 1,
+      "sql_line": 1137,
+      "kind": "merge_plan",
+      "before_sha256": "6b5c87be89d6b3cbc2dea607d7b4607f59e985896e6d6255affcb04dbe77a73d",
+      "after": "                          explain_merge                           \n------------------------------------------------------------------\n Merge on ex_mtarget t (actual rows=0.00 loops=1)\n   ->  Merge Join (actual rows=0.00 loops=1)\n         Merge Cond: (t.a = s.a)\n         ->  Sort (actual: not counted)\n               Sort Key: t.a\n               ->  Seq Scan on ex_mtarget t (actual: not counted)\n                     Filter: (a < '-1000'::integer)\n         ->  Sort (actual: not counted)\n               Sort Key: s.a\n               ->  Seq Scan on ex_msource s (actual: not counted)\n(10 rows)\n"
+    }
+  ]
+}

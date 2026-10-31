@@ -16,6 +16,8 @@ thread_local! {
     static SENT: RefCell<Vec<Vec<SharedInvalidationMessage>>> = const { RefCell::new(Vec::new()) };
     static PENDING: RefCell<Vec<SharedInvalidationMessage>> = const { RefCell::new(Vec::new()) };
     static NEST_LEVEL: Cell<i32> = const { Cell::new(1) };
+    static MISSING_CLASS: Cell<Oid> = const { Cell::new(InvalidOid) };
+    static FAIL_CLASS_LOOKUP: Cell<bool> = const { Cell::new(false) };
 }
 
 fn log(event: String) {
@@ -41,6 +43,7 @@ fn install() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         crate::init_seams();
+        relcache_seams::support_family_relids::set(family_relids);
         xact_seams::get_current_transaction_nest_level::set(|| NEST_LEVEL.get());
         xact_seams::get_current_command_id::set(|_used| Ok(0));
         catalog_seams::is_shared_relation::set(|relid| relid == SHARED_REL);
@@ -52,6 +55,12 @@ fn install() {
             Ok(())
         });
         syscache_seams::lookup_pg_class_by_relid::set(|relid| {
+            if FAIL_CLASS_LOOKUP.get() {
+                return Err(Box::new(types_error::PgError::error("injected catalog lookup failure".to_string())));
+            }
+            if relid == MISSING_CLASS.get() {
+                return Ok(None);
+            }
             Ok(Some(PgClassShape {
                 oid: relid,
                 relnamespace: 0,
@@ -115,6 +124,8 @@ fn install() {
     });
     init_small::globals::SetMyDatabaseId(5);
     NEST_LEVEL.set(1);
+    MISSING_CLASS.set(InvalidOid);
+    FAIL_CLASS_LOOKUP.set(false);
 }
 
 fn sent_flat() -> Vec<SharedInvalidationMessage> {
@@ -545,7 +556,6 @@ fn pre_commit_names_the_relations_built_from_a_changed_family() {
     // D3888: a family a support catalog row named (invalidate.rs `support_family`) sends, before the commit, the relcache
     // messages of the indexes and partitioned tables built from it; a transaction that named none sends nothing more
     install();
-    relcache_seams::support_family_relids::set(family_relids);
     PreCommit_Inval().unwrap();
     assert!(!crate::PendingInvalidationsTouch(&[300], &[]));
     with_state(|state| state.support_families.push(77));
@@ -555,4 +565,37 @@ fn pre_commit_names_the_relations_built_from_a_changed_family() {
     AtEOXact_Inval(true).unwrap();
     let rels: Vec<Oid> = sent_flat().iter().filter_map(|m| match m { SharedInvalidationMessage::Relcache(r) => Some(r.relId), _ => None }).collect();
     assert!(rels.contains(&300) && rels.contains(&301), "{rels:?}");
+}
+
+#[test]
+fn pre_commit_tolerates_a_family_member_dropped_after_the_catalog_scan() {
+    install();
+    MISSING_CLASS.set(300);
+    with_state(|state| state.support_families.push(77));
+    PreCommit_Inval().unwrap();
+    assert!(!crate::PendingInvalidationsTouch(&[300], &[]));
+    assert!(crate::PendingInvalidationsTouch(&[301], &[]));
+    assert!(with_state(|state| state.support_families.is_empty()));
+    // Ordinary callers still require a live relation; this exception is scoped
+    // to the unlocked list used by operator-family invalidation.
+    assert!(CacheInvalidateRelcacheByRelid(300).is_err());
+    CacheInvalidateRelcacheByRelid(SHARED_REL).unwrap();
+    AtEOXact_Inval(true).unwrap();
+    let messages: Vec<_> = sent_flat().into_iter().filter_map(|message| match message {
+        SharedInvalidationMessage::Relcache(r) => Some((r.relId, r.dbId)),
+        _ => None,
+    }).collect();
+    assert!(messages.contains(&(301, 5)) && messages.contains(&(SHARED_REL, InvalidOid)), "{messages:?}");
+    assert!(!messages.iter().any(|&(relid, _)| relid == 300));
+}
+
+#[test]
+fn pre_commit_propagates_a_family_member_lookup_error() {
+    install();
+    FAIL_CLASS_LOOKUP.set(true);
+    with_state(|state| state.support_families.push(77));
+    let error = PreCommit_Inval().unwrap_err();
+    assert_eq!(error.message(), "injected catalog lookup failure");
+    assert!(!with_state(|state| state.support_families.is_empty()));
+    AtEOXact_Inval(false).unwrap();
 }

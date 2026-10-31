@@ -342,7 +342,8 @@ impl Default for WorkerParker {
 }
 
 struct IdleStack {
-    stack: Vec<std::sync::Arc<WorkerParker>>,
+    // Both newest-first wakes and the periodic oldest-first fairness wake are O(1).
+    stack: std::collections::VecDeque<std::sync::Arc<WorkerParker>>,
     /// Directed-wake round counter for the 3-poll starvation cap.
     wakes: u32,
 }
@@ -383,7 +384,7 @@ impl ParkLot {
             m: Mutex::new(()),
             cv: Condvar::new(),
             spinners: atomic::AtomicUsize::new(0),
-            idle: Mutex::new(IdleStack { stack: Vec::new(), wakes: 0 }),
+            idle: Mutex::new(IdleStack { stack: std::collections::VecDeque::new(), wakes: 0 }),
             unparks: atomic::AtomicU64::new(0),
             legacy_parked: atomic::AtomicUsize::new(0),
             tree_pending: atomic::AtomicUsize::new(0),
@@ -557,7 +558,7 @@ impl ParkLot {
             return;
         }
         parker.woken.store(false, atomic::Ordering::SeqCst);
-        g.stack.push(std::sync::Arc::clone(parker));
+        g.stack.push_back(std::sync::Arc::clone(parker));
         while !parker.woken.load(atomic::Ordering::SeqCst)
             && self.epoch.load(atomic::Ordering::SeqCst) == seen
         {
@@ -604,7 +605,7 @@ impl ParkLot {
         if n > from_cv {
             let mut idle = lock(&self.idle);
             while woken < n - from_cv {
-                let Some(p) = idle.stack.pop() else { break };
+                let Some(p) = idle.stack.pop_back() else { break };
                 p.woken.store(true, atomic::Ordering::SeqCst);
                 p.cv.notify_all();
                 woken += 1;
@@ -678,7 +679,7 @@ impl ParkLot {
         let k = n.min(2);
         self.tree_pending.store(n - k, atomic::Ordering::SeqCst);
         for _ in 0..k {
-            if let Some(p) = g.stack.pop() {
+            if let Some(p) = g.stack.pop_back() {
                 p.woken.store(true, atomic::Ordering::SeqCst);
                 p.cv.notify_all();
             }
@@ -708,7 +709,7 @@ impl ParkLot {
             let mut g = lock(&self.idle);
             let mut woke = 0u64;
             for _ in 0..take {
-                match g.stack.pop() {
+                match g.stack.pop_back() {
                     Some(p) => {
                         p.woken.store(true, atomic::Ordering::SeqCst);
                         p.cv.notify_all();
@@ -731,7 +732,7 @@ impl ParkLot {
         }
         g.wakes = g.wakes.wrapping_add(1);
         // 3-poll starvation cap: every 4th directed wake takes the OLDEST.
-        let p = if g.wakes % 4 == 0 { g.stack.remove(0) } else { g.stack.pop().unwrap() };
+        let p = if g.wakes % 4 == 0 { g.stack.pop_front().unwrap() } else { g.stack.pop_back().unwrap() };
         p.woken.store(true, atomic::Ordering::SeqCst);
         p.cv.notify_all();
         self.unparks.fetch_add(1, atomic::Ordering::SeqCst);
@@ -763,6 +764,23 @@ impl Default for ParkLot {
 #[cfg(all(test, not(any(loom, pgrust_sim))))]
 mod parklot_tests {
     use super::ParkLot;
+
+    #[test]
+    fn directed_wakes_preserve_lifo_and_periodic_fifo_fairness() {
+        use super::{atomic::Ordering::SeqCst, lock, WorkerParker};
+        use std::sync::Arc;
+        let lot = ParkLot::new();
+        let parkers: Vec<_> = (0..8).map(|_| Arc::new(WorkerParker::new())).collect();
+        lock(&lot.idle).stack.extend(parkers.iter().cloned());
+        for (round, expected) in [7, 6, 5, 0, 4, 3, 2, 1].into_iter().enumerate() {
+            lot.wake_one_idle();
+            assert!(parkers[expected].woken.load(SeqCst));
+            assert_eq!(parkers.iter().filter(|p| p.woken.load(SeqCst)).count(), round + 1);
+            assert_eq!(lot.idle_workers(), 7 - round);
+        }
+        lot.wake_one_idle();
+        assert_eq!(lot.unparks(), 8);
+    }
 
     /// `park_timeout` must RETURN on its timeout even when the epoch is never
     /// bumped — the property that makes a parked parallel seizer interruptible

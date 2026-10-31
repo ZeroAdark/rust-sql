@@ -2,7 +2,8 @@
 //! (docs/design/connection-scaling.md §D1). pgrust-only.
 //!
 //! A counting semaphore consulted at the top of statement execution
-//! (exec_simple_query and the extended-protocol Execute path), BEFORE any
+//! (simple queries, extended-protocol Parse/Bind/Describe/Execute, and
+//! fast-path function calls), BEFORE any
 //! snapshot is taken or lock acquired. The grain is the TRANSACTION, not
 //! the statement: a session acquires its slot at the first statement of a
 //! transaction and holds it until the transaction ends (commit, rollback,
@@ -40,11 +41,9 @@
 //! mid-transaction (e.g. superuser SET ROLE to a non-superuser) — may
 //! already hold locks, so it runs uncounted rather than parking; the gate
 //! reconverges at that session's next transaction. Extended-protocol
-//! pipelining is part of the same rule: the first Execute of a transaction
-//! gates (blockstate still TBLOCK_STARTED, no pipelined statement has
-//! completed), later statements before Sync ride the XACT_FLAGS_PIPELINING
-//! arm of [`txn_still_open`] and the slot releases at the Sync that ends
-//! the pipeline's transaction.
+//! pipelining is part of the same rule: the first message that starts a
+//! transaction gates, later messages retain the slot while the transaction
+//! command is open, and Sync releases it when that transaction ends.
 //!
 //! Release points (the slot outlives any single statement frame, so RAII
 //! alone no longer suffices): (1) the statement guard's drop, when the
@@ -99,7 +98,7 @@ use std::time::Instant;
 
 use condition_variable::{
     ConditionVariable, ConditionVariableCancelSleep, ConditionVariablePrepareToSleep,
-    ConditionVariableSignal, ConditionVariableSleep,
+    ConditionVariableSignal, ConditionVariableTimedSleep,
 };
 use types_error::PgResult;
 
@@ -141,10 +140,8 @@ pub fn stats() -> (i32, i32, u64, u64) {
 /// The session's current transaction (or extended-protocol pipeline) is
 /// still open at a statement boundary: an explicit or implicit transaction
 /// block is in progress (BEGIN..COMMIT, multi-statement simple message,
-/// aborted block awaiting ROLLBACK), or a pipelined statement completed in
-/// a transaction command that has not finished (XACT_FLAGS_PIPELINING is
-/// set by exec_execute_message before the implicit block is materialized
-/// by the next start_xact_command, so blockstate alone is not enough).
+/// aborted block awaiting ROLLBACK), or an extended-protocol transaction
+/// command has started and has not yet finished at Execute or Sync.
 fn txn_still_open() -> bool {
     // An extended-protocol Execute arrives with the transaction command
     // already started by Parse/Bind (relation locks and a registered
@@ -220,6 +217,21 @@ impl Drop for StatementAdmission {
 
 pub(crate) fn finishes_prepared(tag: types_core::CommandTag) -> bool {
     matches!(cmdtag::GetCommandTagNameAndLen(tag).0, "COMMIT PREPARED" | "ROLLBACK PREPARED")
+}
+
+/// Inspect raw syntax only, before any transaction, snapshot or catalog
+/// locks. Called only when capacity is exhausted; ordinary admissions do
+/// not pay for a second parse. A prepared transaction's finisher must be
+/// able to release locks held by a transaction outside this session.
+pub(crate) fn finishes_prepared_query(mcx: mcx::Mcx<'_>, query: &str) -> bool {
+    query.as_bytes().windows(8).any(|w| w.eq_ignore_ascii_case(b"prepared"))
+        && crate::simple_query::pg_parse_query(mcx, query).is_ok_and(|list| {
+            list.iter().any(|raw| {
+                raw.stmt.is_some_and(|stmt| {
+                    finishes_prepared(utility_seams::create_command_tag::call(stmt))
+                })
+            })
+        })
 }
 
 fn try_admit(limit: i32, defer_to_waiters: bool) -> bool {
@@ -315,7 +327,11 @@ pub fn acquire_for_statement(
         }
         // Sleeps report the MaxActiveQueries wait event and check for
         // interrupts, so cancel/terminate unwind out of the wait.
-        if let Err(e) = ConditionVariableSleep(&GATE_CV, wait_event()) {
+        // An infinite CV sleep rechecks its wake list internally, but does
+        // not return to this loop on those ticks. Use a caller-visible
+        // deadline so a raised/disabled limit takes effect without another
+        // transaction having to release a slot first.
+        if let Err(e) = ConditionVariableTimedSleep(&GATE_CV, 1_000, wait_event()) {
             break Err(e);
         }
     };

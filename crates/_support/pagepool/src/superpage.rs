@@ -196,6 +196,12 @@ fn took(i: u32, st: State) -> State {
 
 /// Take any free superpage in `st`, lowest index first.
 pub(crate) fn take_one(st: State) -> Option<u32> {
+    take_one_bounded(st, usize::MAX)
+}
+
+/// Take a free superpage after examining at most `words` bitmap words. Advance the search hint on exhaustion so
+/// repeated bounded pressure passes can find sparse free pages without scanning the entire reservation inline.
+pub(crate) fn take_one_bounded(st: State, words: usize) -> Option<u32> {
     let b = bm(st);
     if COUNT[b].load(Relaxed) == 0 {
         return None;
@@ -203,7 +209,8 @@ pub(crate) fn take_one(st: State) -> Option<u32> {
     let map = bitmap(b);
     let n = map.len();
     let start = HINT[b].load(Relaxed).min(n.saturating_sub(1));
-    for k in 0..n {
+    let scanned = n.min(words);
+    for k in 0..scanned {
         let wi = (start + k) % n;
         let mut w = map[wi].load(Acquire);
         while w != 0 {
@@ -217,9 +224,12 @@ pub(crate) fn take_one(st: State) -> Option<u32> {
                 Err(now) => w = now,
             }
         }
-        if k == 0 && wi == start {
+        if words == usize::MAX && k == 0 && wi == start {
             let _ = HINT[b].compare_exchange(start, (start + 1).min(n - 1), Relaxed, Relaxed);
         }
+    }
+    if scanned > 0 && words != usize::MAX {
+        let _ = HINT[b].compare_exchange(start, (start + scanned) % n, Relaxed, Relaxed);
     }
     None
 }

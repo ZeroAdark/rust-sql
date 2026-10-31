@@ -1,0 +1,19 @@
+{
+  "source_head": "fb73916ad1d5477fdfeef7d8b25c977249032b5e",
+  "runtime_patch_sha256": "7fbe3ad0b236ae0e42146e26797f663589986508d313aa4fd28ca1fd99345061",
+  "runtime_source_sha256": {
+    "crates/_support/pagepool/src/fallback.rs": "9d2e613dd90de34d1a676223e2cce4eb3fdd738a9b995fb9cd470a2cc10a3d33",
+    "crates/_support/pagepool/src/lib.rs": "9386a9ede67a6310f59e1ab01ee6d11500f65a3731fd834e1e48934aefb541b6",
+    "crates/_support/pagepool/src/os.rs": "b0ee7985d8bf7dfd42bc446de6af43febae36477faaa247b2084087974e8c78f",
+    "crates/_support/pagepool/src/os_miri.rs": "679d8323114c81cb798fcd324048c04ff820a63c166c74de138ea957489434df",
+    "crates/_support/pagepool/src/run.rs": "85e21caa77e199174c2a89e22a7b3d933926e14f20330d89d6261eb4f22ae8a0",
+    "crates/_support/pagepool/src/small.rs": "7a91ee1501decbc41c6da7a82403b49914fec69630773a5488913f3d23547b8e",
+    "crates/_support/pagepool/src/state.rs": "b858532764b604c910871dafd46db72f7b1c511b28806714e7a57feeaba38ede",
+    "crates/_support/pagepool/src/tests.rs": "19afa3b2d55d91cdfa233111ff422aa403b6d2cfdbb0736eaea4909f5c07ccfa"
+  },
+  "binaries": {
+    "postgres": "fbed79a5c8fde4981a9a939a25519bedd1d9493f8ede2d3b985901eda3792071",
+    "initdb": "0ca743d3122a4220f87ec0473d81e714e50ff71927ffc2cb65b3da630f8cddf0"
+  },
+  "qualified": false
+}

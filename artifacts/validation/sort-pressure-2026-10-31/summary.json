@@ -1,0 +1,112 @@
+[
+  {
+    "campaign": "sustained-sort-20261031",
+    "variant": "postgresql",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 690.87890625
+  },
+  {
+    "campaign": "sustained-sort-20261031",
+    "variant": "rust-default",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "sustained-sort-20261031",
+    "variant": "rust-warm64",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "sort-observer-controls2-20261031",
+    "variant": "postgresql",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 690.81640625
+  },
+  {
+    "campaign": "sort-observer-controls2-20261031",
+    "variant": "rust-observed",
+    "runs": 3,
+    "passes": 1,
+    "successful_sorts": 22,
+    "attempted_sorts": 24,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "sort-observer-controls2-20261031",
+    "variant": "rust-observed64",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "sort-observer-controls2-20261031",
+    "variant": "rust-unobserved",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "warm-limit-pressure-20261031",
+    "variant": "baseline-observed",
+    "runs": 3,
+    "passes": 2,
+    "successful_sorts": 34,
+    "attempted_sorts": 35,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "warm-limit-pressure-20261031",
+    "variant": "candidate-observed",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "warm-limit-pressure-20261031",
+    "variant": "candidate-unobserved",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 1024.0
+  },
+  {
+    "campaign": "warm-limit-pressure-20261031",
+    "variant": "postgresql",
+    "runs": 3,
+    "passes": 3,
+    "successful_sorts": 36,
+    "attempted_sorts": 36,
+    "oom_kills": 0,
+    "median_lifetime_peak_mib": 691.0
+  }
+]

@@ -1,0 +1,406 @@
+{
+  "version": 1,
+  "sources": {
+    "3442c4351cce0a18003c2b4e7cc4f777502179f56357776395b275e24756e125": {
+      "case": "subselect",
+      "reason": "Fixed EXPLAIN ANALYZE wrapper; only its masked plan text is returned.",
+      "definitions": {
+        "explain_sq_limit": "d3e83abbf24fe50cc15eb0f6b525e2f51924fa678c2d1809050b201edbad5f64"
+      },
+      "statements": {
+        "0bfbbe0e044445567ab257cec2b896fd63e90a3b1c3dadf283600de15815f6f2": {
+          "kind": "text_plan",
+          "header": "explain_sq_limit",
+          "helper": "explain_sq_limit",
+          "sql_line": 1064
+        }
+      }
+    },
+    "1013722d8b8484b47d9aed1d2c0fe9b5fffa6537f9973cfbf4efaf6932168510": {
+      "case": "memoize",
+      "reason": "EXPLAIN ANALYZE wrapper with upstream counter formatting; SQL query data is not returned by this helper.",
+      "definitions": {
+        "explain_memoize": "5892f2e100ef4209ffb27eb8d04e554da6283c12f21674bc8d5aa2ed795526e6"
+      },
+      "statements": {
+        "a5da7d903ddf55eccad9d5c4a16f666b0f80b28ec70882c02deee6c7f166d880": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 62
+        },
+        "d70d244509adf42e6ed4294c6a15c9575ae1e3bcbc749c50186dc06f3115bbea": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 118
+        },
+        "fa39a76f674a280784ac4197d890b3db8ceb9f64a24aecee844e64f1b13d7f23": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 143
+        },
+        "2b9a53cb59d95c2b725652ffda7ca0261ec7bbf764e64fb4a643b0b83d380998": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 147
+        },
+        "df50261e12e24ea720c073d4dbcbe17c5ad2653b4f460cb522887757b1022ce0": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 163
+        },
+        "622a49001764a12301558e155f9cd8e166ce74015ed120dceabcfdd8856fb94b": {
+          "kind": "text_plan",
+          "header": "explain_memoize",
+          "helper": "explain_memoize",
+          "sql_line": 167
+        }
+      }
+    },
+    "22f4767e7e78811431e9f42a275b12394ec591c65562914c702fb96897395ec1": {
+      "case": "incremental_sort",
+      "reason": "Text or JSON projection of EXPLAIN ANALYZE incremental-sort nodes; invariant helper results remain strict.",
+      "definitions": {
+        "explain_analyze_without_memory": "52b47cea9cca3a3865c261d48aff1d864ae6abdce7084cd5c90fa4c278318347",
+        "explain_analyze_inc_sort_nodes": "077bb28ddee21d3a0fd227d86427475bdfd92f55e3063f1c6602619697da9a42",
+        "explain_analyze_inc_sort_nodes_without_memory": "dfd9a49add15d069d8cfe8fa273f70763d63f82f9b96593ecf8c367f310866b2"
+      },
+      "statements": {
+        "69b5ec797637faabcf26bdf0cab1b1e395aab64041cbe1a50d1f59de9424b876": {
+          "kind": "text_plan",
+          "header": "explain_analyze_without_memory",
+          "helper": "explain_analyze_without_memory",
+          "sql_line": 137
+        },
+        "3fe9a54b4dbbc81f5a11281dbe666b386212d1bafce79253c210b845aaaa7acc": {
+          "kind": "incremental_sort_json",
+          "header": "jsonb_pretty",
+          "helper": "explain_analyze_inc_sort_nodes_without_memory",
+          "sql_line": 138
+        },
+        "f551e12b9900a4a10478e772a73c67391e4e1b76f3b49d0583b5eaacb6beb7fc": {
+          "kind": "text_plan",
+          "header": "explain_analyze_without_memory",
+          "helper": "explain_analyze_without_memory",
+          "sql_line": 166
+        },
+        "6828401f2c5ad90c54a48aa79094123b10e8e9733a01a4e4b6ecbaedc92f366e": {
+          "kind": "incremental_sort_json",
+          "header": "jsonb_pretty",
+          "helper": "explain_analyze_inc_sort_nodes_without_memory",
+          "sql_line": 167
+        }
+      }
+    },
+    "8de1ed503a76fda6550881065cf33868437391561f086a15c68e8f0c2c8ece5a": {
+      "case": "sysviews",
+      "reason": "Inventory of one internal allocator used by PostgreSQL tuplesort. The engine does not create that context; cursor values and remaining view checks stay strict.",
+      "definitions": {},
+      "statements": {
+        "f0fe309f75171e3341c9ce164ecfda8e3a47c4704dae7853a5d8fc3174d614f2": {
+          "kind": "memory_context_absence",
+          "columns": [
+            "type",
+            "name",
+            "?column?",
+            "total_nblocks",
+            "?column?",
+            "free_chunks"
+          ],
+          "context": "Caller tuples",
+          "sql_line": 31
+        }
+      }
+    },
+    "64fc911fe146edd0111c56e92e2714d7431978f43bdf802bde31cd76aa84d325": {
+      "case": "explain",
+      "reason": "Exact diagnostic-only helper calls; upstream-masked counts are format checks, not measurements. Separate paired probes verify SQL values and unmasked root counters.",
+      "definitions": {
+        "explain_filter": "21c7b827ae3fdb84777044e7d35875880cd2403193655eb13456fa01d472188a",
+        "explain_filter_to_json": "0ffda2d4917ffc48ed2097523b4cea4e27ac67dc9b2d2590dcf26eebab2e0fc4"
+      },
+      "statements": {
+        "98989235f424f5bb051d36b34a7bb121e3b363c60d777f4924b7fa173ae0a55a": {
+          "kind": "masked_explain_json",
+          "header": "jsonb_pretty",
+          "helper": "explain_filter_to_json",
+          "sql_line": 145
+        },
+        "03db494c4aa2eb25db38b0d1ed750ff360447ce85ba53cd5bbd92ecd2cb3c615": {
+          "kind": "masked_text_plan",
+          "header": "explain_filter",
+          "helper": "explain_filter",
+          "root_format": "timed",
+          "sql_line": 183
+        },
+        "e74386ce286d42dd69d8fc08ce4eb1bcc2b2c991c930d516875aafc53ad94c24": {
+          "kind": "masked_text_plan",
+          "header": "explain_filter",
+          "helper": "explain_filter",
+          "root_format": "timed",
+          "sql_line": 186
+        },
+        "4ba7ac82742490c7be9dc735b9a680a447e98ce4fdfd17a93f3ac16b38bf0d43": {
+          "kind": "masked_text_plan",
+          "header": "explain_filter",
+          "helper": "explain_filter",
+          "root_format": "timed",
+          "sql_line": 188
+        }
+      }
+    },
+    "3ed2a5133118ffc8c269555e6823619712a2a6d0a5153eb58002cd9643ec771e": {
+      "case": "partition_prune",
+      "reason": "Exact diagnostic-only helper calls; upstream-masked counts are format checks, not measurements. Separate paired probes verify SQL values and unmasked root counters.",
+      "definitions": {
+        "explain_analyze": "8acc44b1ed713e5e00180e7b1de9dfb0b57ebaec9c0fe0707baf03b95fae55b9",
+        "explain_parallel_append": "1065f8c88715fec56b9c95a433a3cbe046c30e3c3b7c4b69043d037a43e0408f"
+      },
+      "statements": {
+        "1e021a291c1b69f3e3544a2d5cb063ed538cad8e48a89c5dafb11f807040e5cd": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 629
+        },
+        "e68ecd3d8226546cadb2c20608960590eb0d895ea0d1af3b203f35bc24bc54ed": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 635
+        },
+        "f410f00e8f34c52f303b40473bb8d5b0c7956bc666ada4b51c7b827899810998": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 636
+        },
+        "bccbc38ac271c4c2c0dea6ff3ef16a2e24b8da57cc8f449d396108424d367b2c": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 639
+        },
+        "fb1fd29a554b4ebc9568aac2e6f5e4120f6f6b5fff1f17115c810f9732a75708": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 642
+        },
+        "f4cdfcebeaca02532b07bce76746833448ee16235663028dcee79ba800cde64d": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 668
+        },
+        "565aa9d64a45a5823d3a3d61356a592e495090d7656c977235089075f821f5de": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 672
+        },
+        "6b48584792bdc0d4ce79d897f6c3c4a5bcbd7ca576277afe710c66014551d26a": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 676
+        },
+        "cfa2979e9c06d94f2a8a1c61833649c07777b608139079ee6763b6f4c7f9183a": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 677
+        },
+        "ca0671ba752f23cee7db319491bd03a6d4476fde332312dfb165ce3f67c15dd4": {
+          "kind": "text_plan",
+          "header": "explain_analyze",
+          "helper": "explain_analyze",
+          "sql_line": 737
+        },
+        "9f48b664a0b85a3cc25105e2dff56e2e7794457356fb555abf57263b4970a188": {
+          "kind": "text_plan",
+          "header": "explain_analyze",
+          "helper": "explain_analyze",
+          "sql_line": 744
+        },
+        "64955bc273bee33fcfbf1b710f691c6ab96e50c6d76a13c3937b4ef2a356a05a": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 1231
+        },
+        "69925dd4027859910e1e180436cc648f3270dd519544a41bc6afa862e690c0f9": {
+          "kind": "masked_text_plan",
+          "header": "explain_parallel_append",
+          "helper": "explain_parallel_append",
+          "root_format": "rows",
+          "sql_line": 1236
+        }
+      }
+    },
+    "5bd0f5f2e74d282c77fa49cd628dfc120627bd546ecaca0adaec1b5c642a73bf": {
+      "case": "join_hash",
+      "reason": "Only projections of absent PostgreSQL hash batch diagnostics may return NULL. Every actual query value and count remains strict.",
+      "definitions": {
+        "find_hash": "3db480c55f0d889167c05fbaec3a8b3e68041beca30cd005f8106859040979cd",
+        "hash_join_batches": "d69b55fc1db6e8422c215dd5ca38796a1b7fa7907d11702e15b350f56f264643"
+      },
+      "statements": {
+        "55284b2775deab7f9fd04bf62160056beb0462df74ec810c461299c2228628f1": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "initially_multibatch",
+            "increased_batches"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 102
+        },
+        "d7024c293d6e62961a1f77418e8d3a09d7dfb3b565c6463450ff8c1a6ab0d3f3": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "initially_multibatch",
+            "increased_batches"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 207
+        },
+        "21d72892512865afc5d4b2236835cb58e6ff80d0ed34375642c4ca1466498877": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "initially_multibatch",
+            "increased_batches"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 223
+        },
+        "7fae2a2e89e5b769bed3dbfa6eabf11666c07ea1b55a7e5b7b97b7008f4125d4": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "original",
+            "final"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 260
+        },
+        "e4d165179d2406fdf3d38d61f290364461be6264585567757f8e176ecd0b58bc": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "original",
+            "final"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 304
+        },
+        "df5ae6d3fb050dc5e312a35606e553df558f41fff0b642d4b6f873d7c85d31e0": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "multibatch"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 337
+        },
+        "6fe33845b71e01a0a45def25382350c536a2e34ddd89632f48036ef82098916e": {
+          "kind": "unavailable_hash_metrics",
+          "columns": [
+            "multibatch"
+          ],
+          "helper": "hash_join_batches",
+          "sql_line": 501
+        }
+      }
+    },
+    "6d8598c9140470181dbf79b07b1258b1c17a4f4b58531b5141f1a469f27fafac": {
+      "case": "select_parallel",
+      "definitions": {
+        "explain_parallel_sort_stats": "7564b3576cd548df072ad364fc8648bd55cb9696d12282ed60836aa2691a3831"
+      },
+      "statements": {
+        "47777481ebdfec9bcdf82a9a99bdf76295fa8f10de434321d8c68785abf5f376": {
+          "kind": "text_plan",
+          "header": "explain_parallel_sort_stats",
+          "sql_line": 255,
+          "sql": "select * from explain_parallel_sort_stats();"
+        },
+        "e6677f142c3b8019288c6e194e52413f0a65d001117ef6c4910eb7a2a731e8c7": {
+          "kind": "postgres_worker_activity",
+          "columns": [
+            "wrk_to_launch",
+            "wrk_launched"
+          ],
+          "sql_line": 587,
+          "sql": "select parallel_workers_to_launch > :'parallel_workers_to_launch_before'  AS wrk_to_launch,\n       parallel_workers_launched > :'parallel_workers_launched_before' AS wrk_launched\n  from pg_stat_database\n  where datname = current_database();"
+        }
+      }
+    },
+    "3e17d4d53b10d967eeb6698dcf2d83e8f6d1551fc1b00782b8056313bc59a0d2": {
+      "case": "merge",
+      "definitions": {
+        "explain_merge": "7cd519c188c7dbcb91f1aaf90c6fc7b2588b4c0ad329a42399ecc388ffb73004"
+      },
+      "statements": {
+        "04476dcb7d6bb193f19b7b732c4406bd662f99c2425629b99991ed05dd1398f0": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1087,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED THEN\n\tUPDATE SET b = t.b + 1');"
+        },
+        "56112593603798e1752a32a263eb80da09ee1a9769eb210f9875a55d52417a51": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1093,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED AND t.a < 10 THEN\n\tUPDATE SET b = t.b + 1');"
+        },
+        "81b1e64f1d19fa2ed56cfde967d8b0390c9dcf820e6de68b1df8b3cddb21911f": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1099,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED AND t.a < 10 THEN\n\tUPDATE SET b = t.b + 1\nWHEN MATCHED AND t.a >= 10 AND t.a <= 20 THEN\n\tDELETE');"
+        },
+        "9ac216b6a575187424a557325dbd9d7578f1c222ae20c754043dbd4d78808659": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1107,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN NOT MATCHED AND s.a < 10 THEN\n\tINSERT VALUES (a, b)');"
+        },
+        "abe9097d9e90e03ecff5454c7b9cf7e447693f53996164a51fbd582b932ff823": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1113,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN MATCHED AND t.a < 10 THEN\n\tUPDATE SET b = t.b + 1\nWHEN MATCHED AND t.a >= 30 AND t.a <= 40 THEN\n\tDELETE\nWHEN NOT MATCHED AND s.a < 20 THEN\n\tINSERT VALUES (a, b)');"
+        },
+        "925a1589cdacc2fd747d6dabc620e82bd8500513dabcaf4a27a0eb351f404abd": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1123,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN NOT MATCHED BY SOURCE and t.a < 10 THEN\n\tDELETE');"
+        },
+        "847861e053e13dd14a6640624b16b7e998b27e3ad229a1c790e3a678b86db554": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1129,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a\nWHEN NOT MATCHED BY SOURCE AND t.a < 10 THEN\n\tDELETE\nWHEN NOT MATCHED BY TARGET AND s.a < 20 THEN\n\tINSERT VALUES (a, b)');"
+        },
+        "5173854976b8a6e3d0a79f016e2f0f37ecdf1aaf4912df776ea95d81ae4ee2e0": {
+          "kind": "merge_plan",
+          "header": "explain_merge",
+          "sql_line": 1137,
+          "sql": "SELECT explain_merge('\nMERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a AND t.a < -1000\nWHEN MATCHED AND t.a < 10 THEN\n\tDO NOTHING');"
+        }
+      }
+    }
+  }
+}

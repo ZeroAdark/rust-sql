@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "reason": "The engine uses global grouping over appended join results and its own parallel execution path; ordered join results remain unchanged.",
+  "source_sha256": "1d6aa14b13390f8655cf495ec43b067b8c726e97234ffb3296573a4ca4cbc459",
+  "expected_sha256": "330390ef0e24ad9fe6e716dee72bb444b01d6383bd948a41effa066ba7ff11a0",
+  "plans": [
+    {
+      "sql_sha256": "128c158dc540207eca2f0b771fe63ae898f8edf104e003c95296eeb89757fa08",
+      "occurrence": 1,
+      "sql_line": 135,
+      "before_sha256": "5a1f80590e46a4f429c1bc8ecb2593a8628a80fae66deb7844014fb30757a957",
+      "after": "                                                QUERY PLAN                                                 \n-----------------------------------------------------------------------------------------------------------\n Group\n   Group Key: (COALESCE(prt1.a, p2.a)), (COALESCE(prt1.b, p2.b))\n   ->  Sort\n         Sort Key: (COALESCE(prt1.a, p2.a)), (COALESCE(prt1.b, p2.b))\n         ->  Append\n               ->  Merge Full Join\n                     Merge Cond: ((prt1_1.a = p2_1.a) AND (prt1_1.b = p2_1.b))\n                     Filter: ((COALESCE(prt1_1.a, p2_1.a) >= 490) AND (COALESCE(prt1_1.a, p2_1.a) <= 510))\n                     ->  Sort\n                           Sort Key: prt1_1.a, prt1_1.b\n                           ->  Seq Scan on prt1_p1 prt1_1\n                     ->  Sort\n                           Sort Key: p2_1.a, p2_1.b\n                           ->  Seq Scan on prt2_p1 p2_1\n               ->  Merge Full Join\n                     Merge Cond: ((prt1_2.a = p2_2.a) AND (prt1_2.b = p2_2.b))\n                     Filter: ((COALESCE(prt1_2.a, p2_2.a) >= 490) AND (COALESCE(prt1_2.a, p2_2.a) <= 510))\n                     ->  Sort\n                           Sort Key: prt1_2.a, prt1_2.b\n                           ->  Seq Scan on prt1_p2 prt1_2\n                     ->  Sort\n                           Sort Key: p2_2.a, p2_2.b\n                           ->  Seq Scan on prt2_p2 p2_2\n               ->  Merge Full Join\n                     Merge Cond: ((prt1_3.a = p2_3.a) AND (prt1_3.b = p2_3.b))\n                     Filter: ((COALESCE(prt1_3.a, p2_3.a) >= 490) AND (COALESCE(prt1_3.a, p2_3.a) <= 510))\n                     ->  Sort\n                           Sort Key: prt1_3.a, prt1_3.b\n                           ->  Seq Scan on prt1_p3 prt1_3\n                     ->  Sort\n                           Sort Key: p2_3.a, p2_3.b\n                           ->  Seq Scan on prt2_p3 p2_3\n(32 rows)\n"
+    },
+    {
+      "sql_sha256": "9eb87f61955aead8d368072f404b7d72a0cfe1f49a9f64fe9c2a6721ee1eaf37",
+      "occurrence": 2,
+      "sql_line": 1246,
+      "before_sha256": "c819cdf125864df7702aa0f34151fea8b91a5c47c0cc5a855e0ac42f728d545b",
+      "after": "                               QUERY PLAN                               \n------------------------------------------------------------------------\n Limit\n   ->  Append\n         ->  Nested Loop\n               ->  Seq Scan on pht1_p1 p1_1\n               ->  Memoize\n                     Cache Key: p1_1.c\n                     Cache Mode: logical\n                     ->  Index Scan using pht1_p1_c_idx on pht1_p1 p2_1\n                           Index Cond: (c = p1_1.c)\n         ->  Nested Loop\n               ->  Seq Scan on pht1_p2 p1_2\n               ->  Memoize\n                     Cache Key: p1_2.c\n                     Cache Mode: logical\n                     ->  Index Scan using pht1_p2_c_idx on pht1_p2 p2_2\n                           Index Cond: (c = p1_2.c)\n         ->  Nested Loop\n               ->  Seq Scan on pht1_p3 p1_3\n               ->  Memoize\n                     Cache Key: p1_3.c\n                     Cache Mode: logical\n                     ->  Index Scan using pht1_p3_c_idx on pht1_p3 p2_3\n                           Index Cond: (c = p1_3.c)\n(23 rows)\n"
+    }
+  ]
+}

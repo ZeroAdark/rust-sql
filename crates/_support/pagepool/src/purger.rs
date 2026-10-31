@@ -251,18 +251,15 @@ fn step(k: usize, f: impl FnOnce() -> usize) -> usize {
     got
 }
 
-/// pppress card 6: `PGRUST_POOL_GROW_GUARD=1`, read once (0: unread, 1: off, 2: on).
+/// `PGRUST_POOL_GROW_GUARD` defaults on; `=0` opts out. Read once (0: unread, 1: off, 2: on).
 static GUARD_SWITCH: AtomicU32 = AtomicU32::new(0);
 
-/// pppress card 6: `PGRUST_POOL_GROW_GUARD=1`, read ONCE (`pagepool::init`): RELEASE BEFORE GROW. While the ladder
-/// presses the pool (its last sample left less room under its line than a grow adds, `claimer::room`), a thread about to
-/// add pool charge (a span or block take past the shelves, a lazy span's commit or grow) first gives back the pool's own
-/// free memory inline (`grow_guard`), and a zeroed take of whole superpages takes a free warm one before a Cold one. The
-/// claimer already prefaults nothing while pressed (its room).
+/// Reclaim before growth, enabled by default. The optional ladder retains its existing reclaim path. The published
+/// process budget uses a bounded whole-page path; zeroed takes prefer already-resident warm pages while pressed.
 pub(crate) fn guard_on() -> bool {
     match GUARD_SWITCH.load(Relaxed) {
         0 => {
-            let v = if os::env_is_one(c"PGRUST_POOL_GROW_GUARD") { 2 } else { 1 };
+            let v = if os::env_on_by_default(c"PGRUST_POOL_GROW_GUARD") { 2 } else { 1 };
             GUARD_SWITCH.store(v, Relaxed);
             v == 2
         }
@@ -280,10 +277,39 @@ pub(crate) fn ladder_pressed() -> bool {
     crate::claimer::room() == 0
 }
 
-/// pppress card 6: the ladder presses the pool for a grow of `bytes` (`PGRUST_POOL_GROW_GUARD` on; with no gate, never).
+/// The server's soft reclaim budget: MAX before a limit is known; zero means known but exhausted. Keep it separate
+/// from the allocation cap, whose historical zero means unlimited and whose refusal semantics must not change.
+static RECLAIM_BUDGET: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Publish reclaim guidance without making global allocations fallible. `None` means no known limit; `Some(0)`
+/// permits allocations but retains no optional prefault budget. Called at startup and when the server limit updates.
+pub fn set_reclaim_budget(bytes: Option<usize>) {
+    RECLAIM_BUDGET.store(bytes.unwrap_or(usize::MAX), Relaxed);
+}
+
+/// O(1) counter reads. The optional explicit/ledger cap may tighten the published reclaim budget, never loosen it.
+#[inline]
+pub(crate) fn budget_room() -> usize {
+    let published = RECLAIM_BUDGET.load(Relaxed);
+    let cap = stats::cap();
+    let budget = published.min(if cap == 0 { usize::MAX } else { cap });
+    if budget == usize::MAX { usize::MAX } else { budget.saturating_sub(stats::claimed()) }
+}
+
+/// Leave one bounded reclaim pass of headroom before optional cold-page prefaulting. Recycling a warm page does not
+/// grow memory and remains allowed. No syscall, allocation or per-query scan is needed to make this decision.
+#[inline]
+pub(crate) fn prefault_held() -> bool {
+    guard_on() && budget_room() < 8 * SUPER
+}
+
+/// A grow would exhaust the known soft budget, or the optional ladder leaves insufficient room.
 #[inline]
 pub(crate) fn pressed(bytes: usize) -> bool {
-    guard_on() && crate::claimer::room() < bytes.max(1)
+    if !guard_on() {
+        return false;
+    }
+    crate::claimer::room() < bytes.max(1) || budget_room() < bytes.max(1)
 }
 
 /// pppress card 6: the inline releases (`grow_guard`): count, bytes, ns, the longest ns, by `GUARD_BIN_US` (µs, upper
@@ -353,20 +379,28 @@ pub(crate) fn fresh(i: u32) {
     }
 }
 
-/// pppress card 6: RELEASE BEFORE GROW at a take's or grow's settle point (no pool lock held, before the caller touches
-/// what it took): what this thread claimed while the ladder pressed goes back from the pool's own free memory, inline:
-/// dead runs, free runs inside superpages in use (emptiest first, split first in `pool_thp_partial` 2; never the fresh
-/// superpage's untouched runs), warm lazy spans, then whole free superpages past the warm reserve's spare; up to the owed
-/// bytes, through `os::release` (give_back) only. One releaser at a time (the purger's lock, tried once): another
-/// running, none here (counted).
+/// Reclaim at a take's/grow's settle point without holding a pool lock. Budget pressure accumulates sub-superpage
+/// growth before bounded whole-page release, avoiding a 2 MiB return for each 4 KiB commit. Explicit ladder pressure
+/// retains its existing finer-grained path. No live allocation is released; a busy purger skips rather than blocks.
 #[inline]
 pub(crate) fn settle() {
     if guard_on() {
         let owed = OWED.with(|o| o.replace(0));
         // read and cleared at every settle: a fresh superpage is skipped only by the release its own claim owes
         let fresh = FRESH.with(|f| f.replace(superpage::NONE));
-        if owed != 0 {
+        if owed == 0 || !pressed(owed) {
+            return;
+        }
+        if crate::claimer::room() < owed {
             guard_release(owed, fresh);
+        } else {
+            // O(1), thread-local accounting. At most one superpage minus a byte remains outstanding per thread;
+            // a later settle after pressure clears discards it. Never round each small lazy commit up to 2 MiB.
+            let whole = owed / SUPER * SUPER;
+            OWED.with(|o| o.set(owed - whole));
+            if whole != 0 {
+                guard_release(whole, fresh);
+            }
         }
     }
 }
@@ -379,6 +413,45 @@ fn guard_release(want: usize, fresh: u32) -> usize {
         return 0;
     }
     let t0 = pg_clock::mono_ns();
+    let got = if crate::claimer::room() < want.max(1) {
+        guard_release_ladder(want, fresh)
+    } else {
+        // The default budget path has a bounded amount of work. Never scan dead ranges, partial superpages or the
+        // full reservation on an allocation thread; the background purger remains responsible for those.
+        guard_release_budget(want)
+    };
+    let ns = pg_clock::mono_ns().saturating_sub(t0);
+    stats::PURGE_NS.fetch_add(ns, Relaxed);
+    superpage::unspin(&PURGING);
+    GUARDS.fetch_add(1, Relaxed);
+    GUARD_BYTES.fetch_add(got as u64, Relaxed);
+    GUARD_NS.fetch_add(ns, Relaxed);
+    GUARD_MAX_NS.fetch_max(ns, Relaxed);
+    let us = ns / 1_000;
+    GUARD_HIST[GUARD_BIN_US.iter().position(|&b| us < b).unwrap_or(GUARD_BINS - 1)].fetch_add(1, Relaxed);
+    got
+}
+
+fn guard_release_budget(want: usize) -> usize {
+    let want = want.min(8 * SUPER).min(crate::warmres::spare_cap()) / SUPER * SUPER;
+    let mut got = 0;
+    for _ in 0..8 {
+        if got >= want {
+            break;
+        }
+        let found = [State::WarmDirty, State::WarmZero].into_iter()
+            .find_map(|st| superpage::take_one_bounded(st, 64).map(|i| (i, st)));
+        let Some((i, st)) = found else { break };
+        let released = release_run(i, 1, st);
+        if released == 0 {
+            break;
+        }
+        got += released;
+    }
+    got
+}
+
+fn guard_release_ladder(want: usize, fresh: u32) -> usize {
     let mut got = api::release_dead(want, true);
     if got < want {
         got += state::release_free_runs_but(want - got, true, fresh);
@@ -392,15 +465,6 @@ fn guard_release(want: usize, fresh: u32) -> usize {
     if got < want {
         got += release_free(State::WarmZero, (want - got).min(crate::warmres::spare_cap()), 0);
     }
-    let ns = pg_clock::mono_ns().saturating_sub(t0);
-    stats::PURGE_NS.fetch_add(ns, Relaxed);
-    superpage::unspin(&PURGING);
-    GUARDS.fetch_add(1, Relaxed);
-    GUARD_BYTES.fetch_add(got as u64, Relaxed);
-    GUARD_NS.fetch_add(ns, Relaxed);
-    GUARD_MAX_NS.fetch_max(ns, Relaxed);
-    let us = ns / 1_000;
-    GUARD_HIST[GUARD_BIN_US.iter().position(|&b| us < b).unwrap_or(GUARD_BINS - 1)].fetch_add(1, Relaxed);
     got
 }
 
@@ -554,6 +618,19 @@ pub fn return_warm() -> usize {
 /// order: free superpages, dead runs, warm lazy spans, the claimer's zero superpages, then free runs inside superpages
 /// still in use. The bytes released.
 pub fn return_warm_now(want: usize) -> usize {
+    if want == 0 {
+        return 0;
+    }
+    // Idle handoffs can leave empty small runs on adoption lists. Make them visible before reading releasable(),
+    // rather than waiting for the purger's periodic sweep. Also flush system fallbacks when only GLOBAL_ON is set.
+    // This cold scan is linear in the abandoned runs/frees; the release phase below stays a no-op with the pool off.
+    crate::flush_remote();
+    return_warm_swept(want)
+}
+
+// The background purger already sweeps before serving an ask. Keep that work out of a second traversal.
+// Existing R1 step/call timings cover this release phase; the synchronous preflight sweep precedes it.
+fn return_warm_swept(want: usize) -> usize {
     // `PGRUST_POOL_FAST_RELEASE`: what is releasable is read after the central lists went home (their free runs count)
     let fast = fast_on();
     let want = if fast { want } else { want.min(releasable()) };
@@ -1138,13 +1215,17 @@ pub fn lazy_pass_now() -> usize {
 }
 
 /// The purger's pass over the pressure asked of it (`set_pressure`, R1's `return_warm`): released now. The bytes released.
-fn serve_ask() -> usize {
+fn serve_ask(already_swept: bool) -> usize {
     let r1 = LANDING.load(Acquire);
     let bytes = ASK.swap(0, Acquire);
     let asked = if r1 != 0 { ASK_NS.swap(0, Relaxed) } else { 0 };
+    // An ask can arrive after run() checked its periodic sweep condition.
+    if !already_swept && (r1 != 0 || bytes > 0) {
+        crate::flush_remote();
+    }
     let mut got = 0;
     if r1 != 0 {
-        got = return_warm_now(((r1 & ASK_BYTES) as usize).max(bytes));
+        got = return_warm_swept(((r1 & ASK_BYTES) as usize).max(bytes));
     } else if bytes > 0 {
         let c = ASK_CLASS.load(Relaxed);
         got = purge_now(bytes, (c != NO_CLASS).then(|| Class::from_u8(c)));
@@ -1173,7 +1254,7 @@ fn serve_ask() -> usize {
 fn cut_in() {
     if r1_waiting() {
         CUT_INS.fetch_add(1, Relaxed);
-        serve_ask();
+        serve_ask(false);
     }
 }
 
@@ -1181,7 +1262,7 @@ fn cut_in() {
 /// stands in for the purger's wake). The bytes released.
 #[doc(hidden)]
 pub fn serve_ask_now() -> usize {
-    serve_ask()
+    serve_ask(false)
 }
 
 fn run() {
@@ -1204,11 +1285,12 @@ fn run() {
         }
         RETURNING.store(false, Release);
         let asked = ASK.load(Acquire) != 0 || LANDING.load(Acquire) != 0;
-        if asked || tick().wrapping_sub(swept_at) >= SWEEP_MS {
+        let swept = asked || tick().wrapping_sub(swept_at) >= SWEEP_MS;
+        if swept {
             crate::flush_remote();
             swept_at = tick();
         }
-        serve_ask();
+        serve_ask(swept);
         // C.23: given base spans back first (a dirty one blocks the next carve), out of the pass's remap budget
         let spent = crate::span::clean_base(if cfg.age_pass_max == 0 { usize::MAX } else { cfg.age_pass_max });
         cut_in();

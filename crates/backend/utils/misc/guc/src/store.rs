@@ -201,10 +201,9 @@ pub fn initialize_guc_options_for_child_base(
     crate::redefine_inherited_custom_variables()
 }
 
-// D4682 step 2 (a), the GUC registry template: while on (launch_backend sets it when backend_thread_reuse_keep is on), a
-// registry shares the process's index of the built-in variables' names, published by the first registry built while on,
-// and builds only the values (every variable, its hooks, the boot and base values: nothing of a previous session).
-static SHARE_BUILTIN_INDEX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Built-in names and their slots are immutable for the process, independently of session/thread retention. Share
+// that index by default; every registry still builds its own values, hooks and boot/base state from scratch.
+static SHARE_BUILTIN_INDEX: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 static BUILTIN_INDEX: pgsync::OnceLock<std::sync::Arc<crate::registry::BuiltinIndex>> = pgsync::OnceLock::new();
 // The one publish: a registry that finds the index unpublished takes this and looks again, so two first sessions racing
 // build it once (a lock and a second look rather than get_or_init: the determinism lint ratchets raw once sites).
@@ -221,7 +220,7 @@ fn initialize_guc_options_impl(publish: impl Fn(&str) -> bool) -> PgResult<()> {
     let share = SHARE_BUILTIN_INDEX.load(std::sync::atomic::Ordering::Relaxed);
     let mut reg = GucRegistry::new();
     if let Some(builtins) = BUILTIN_INDEX.get().filter(|_| share) {
-        reg.adopt_builtin_index(std::sync::Arc::clone(builtins));
+        reg.adopt_builtin_index(std::sync::Arc::clone(builtins))?;
     }
     for setting in all_settings() {
         let Some(mut var) = build_variable(setting) else {

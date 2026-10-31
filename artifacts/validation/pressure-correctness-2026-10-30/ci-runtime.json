@@ -1,0 +1,200 @@
+{
+  "run_id": 41118637914,
+  "head_sha": "b2c98c8576d9f1b73e12124c749e5129fcb16c27",
+  "status": "completed",
+  "conclusion": "success",
+  "url": "https://github.com/ZeroAdark/rust-sql/actions/runs/41118637914",
+  "created_at": "2026-10-30T19:51:24Z",
+  "updated_at": "2026-10-30T20:33:12Z",
+  "jobs": [
+    {
+      "id": 124279311249,
+      "name": "dependencies",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run rustup toolchain install 1.96.0 --profile minimal",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo install cargo-audit --version 0.22.2 --locked -j 2",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo audit --deny warnings --json > dependency-audit.json",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 124279311561,
+      "name": "server",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run sudo apt-get update && sudo apt-get install -y build-essential pkg-config libre2-dev clang lld libssl-dev libicu-dev postgresql-client python3-psycopg bison flex zlib1g-dev locales",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run sudo localedef -i en_US -f UTF-8 en_US.UTF-8",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run rustup toolchain install 1.96.0 --profile minimal",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo build --locked --release -j 2 -p main_main -p initdb",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p gravity_lowerv4 --lib",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p inval --lib",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p gravity_lowerv4_it --test lowerv4_suite t_sort_d643_topk_finish::",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p compression -p basebackup_compress -p pgrc_codec -p xlogreader -p xloginsert -p parquet_read --lib",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p gravity_wasm --test gravity_wasm_suite",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build the pinned PostgreSQL reference separately",
+          "conclusion": "success"
+        },
+        {
+          "name": "Differential SQL and whole-process crash/restore checks",
+          "conclusion": "success"
+        },
+        {
+          "name": "Server authentication, TLS and certificate rotation",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run ulimit -s 65520",
+          "conclusion": "success"
+        },
+        {
+          "name": "Native PostgreSQL regression control",
+          "conclusion": "success"
+        },
+        {
+          "name": "Capture strict PostgreSQL regression expectations",
+          "conclusion": "success"
+        },
+        {
+          "name": "Reviewed engine regression contract",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build separately patched PostgreSQL window control",
+          "conclusion": "success"
+        },
+        {
+          "name": "Independent window-frame oracle against declared upstream fix",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "id": 124279311716,
+      "name": "unit",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run rustup toolchain install 1.96.0 --profile minimal",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked -j 2 -p gravity_program -p pgsync -p lmgr_proc",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo test --locked --release -j 2 -p pagepool --features global --test frames --test idle_handoff --test idle_fallback",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run python3 -m py_compile scripts/validation/*.py",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run python3 -m unittest discover -s scripts/validation -p 'test_*.py'",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run cargo run --locked --release -j 2 -p gravity_program --example cache_pressure > cache-pressure.csv",
+          "conclusion": "success"
+        },
+        {
+          "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ]
+}

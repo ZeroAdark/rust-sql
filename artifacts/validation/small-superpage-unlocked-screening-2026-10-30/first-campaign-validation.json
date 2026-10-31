@@ -1,0 +1,33 @@
+{
+  "evidence_valid": false,
+  "reason": "Strict comparison requires zero measured CPU throttling in every trial; retain all trials and repeat the full campaign.",
+  "invalid_trials": [
+    {
+      "report": "baseline-4.json",
+      "cpu_delta": {
+        "nr_bursts": 0,
+        "usage_usec": 2581588,
+        "burst_usec": 0,
+        "nr_periods": 8,
+        "user_usec": 1182398,
+        "system_usec": 1399190,
+        "nr_throttled": 1,
+        "throttled_usec": 613
+      }
+    },
+    {
+      "report": "candidate-5.json",
+      "cpu_delta": {
+        "nr_periods": 12,
+        "user_usec": 1685249,
+        "nr_bursts": 0,
+        "throttled_usec": 38685,
+        "system_usec": 2323096,
+        "nr_throttled": 1,
+        "burst_usec": 0,
+        "usage_usec": 4008346
+      }
+    }
+  ],
+  "production_qualified": false
+}

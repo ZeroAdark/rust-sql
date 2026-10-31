@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "production_qualified": false,
+  "binary_sha256": "26ba69060488b50cc165b9a450c397eab524c1240870012d7c775e12f4540f77",
+  "lowering_tests": 642,
+  "validation_tests": 124,
+  "aggregate_comparisons": 88,
+  "broader_differential_checks": 87,
+  "explain_checks": 7,
+  "window_trace_checks_per_engine": 142,
+  "window_oracle_checks_per_engine": 220,
+  "smoke_checks": 12,
+  "raw_regression": {
+    "passed": false,
+    "matched": 203,
+    "total": 231
+  },
+  "reviewed_regression": {
+    "passed": true,
+    "accepted": 231,
+    "total": 231
+  },
+  "isolation_cases": 510,
+  "matrix_trials": 40,
+  "matrix_measured_statements": 1824000,
+  "calibration_trials_separate": 10
+}

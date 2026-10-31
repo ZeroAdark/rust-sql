@@ -942,6 +942,12 @@ members = [
     "crates/tpde/compiler-x64",
 ]
 
+[workspace.dependencies]
+# Patched floors for the October 2026 RustSec advisories. Keep legacy zstd
+# decoders disabled consistently across server, tests, and benchmark crates.
+zstd = { version = "0.14.3", default-features = false }
+wasmtime = { version = "48.0.8", default-features = false, features = ["cranelift", "runtime", "std"] }
+
 [workspace.package]
 edition = "2021"
 publish = false

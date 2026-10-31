@@ -1,0 +1,9 @@
+{
+  "decision": "rejected",
+  "promoted": false,
+  "reason": "Five of six candidate pressure trials fail; two have cgroup OOM group kills. Observed candidate reclaim counters remain zero.",
+  "candidate_sha256": "73addf2f8955a5db2b2116c26041cdd7e5e6778eabf3589355d20e5ea9776d7b",
+  "accepted_sha256": "0be60915b40c9f70f39dcb3a0fd1f8918608a20095f767ec081a5b5320caa277",
+  "performance_comparison_run": false,
+  "next_issue": "The default 1 GiB OS reserve makes a known 1 GiB limit produce budget zero; the allocator treats zero as unlimited."
+}

@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "total": 231,
+  "accepted": 231,
+  "unresolved": [],
+  "reference_report_sha256": "1201bde6398bcd27ca846f9438701314543da066eb6e04fb4b17ec00b6c44e99",
+  "candidate_report_sha256": "640e37784b5bea3ad69bcedbe366b5be03593091c0617e8535f85d28db68480b",
+  "diagnostic_policy_sha256": "6869dea93f0c8ba751403ea71fdc8d4be440d19e8c902065efe62ceaf3e45ff0",
+  "choice_policy_sha256": "658724128e4a06246bd630b44d13ef8ccbe3da82918f5918a2af16cb666dad0b",
+  "aggregate_strategy_policy_sha256": "c112e25d6dd40077110fde4351cc0b7b34e6de2a76cbfce90e5ca6ab3a08982a",
+  "worker_context_policy_sha256": "d2a7f0304d29d6a8f42be180fc921e4495b37897b93774264616ca9b602fd857",
+  "merge_trace_policy_sha256": "bfadddc14a7896b3cae4793399def9861706c134e17ebdc0e25fe8642898a23d",
+  "window_trace_policy_sha256": "ca3c9a7f030f7965496d26cb9543cf9a02f9fef5b47cf02bbca444f2bcac9afd",
+  "raw_candidate_verdict": false,
+  "full_audit_archive_member": "audit-capture/summary.json"
+}

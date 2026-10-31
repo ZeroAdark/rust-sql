@@ -1,0 +1,11 @@
+# Honor allocator settings before pool initialization
+
+The native server copied its allocator configuration before the general memory-policy parser ran. The early constructor's explicit list omitted pool_warm_zero_max and pool_host_age_ms, so the settings view could later show requested values while the allocator retained its defaults. The constructor now applies both before initializing the pool. No default or hot allocation path changes; startup still scans a fixed-size list.
+
+A new test starts a fresh copy of the test executable with an 8 MiB maximum and a 5 ms host-pressure age. It checks that the real constructor applied both values and that the initialized pool respects the maximum. The test and locked release build pass. All 133 Python validation-tool tests also pass.
+
+The frozen corrected binary is 8e5bfc2b093055a5d2257dc817037a2b2f2906faf7c1b83e431f472a2f0513f0. Under a private 1 GiB cgroup, three runs requesting a 64 MiB warm maximum and three requesting 16 MiB each complete twelve million-row full sorts. All 72 ordered COPY hashes match the independent expected results, the observed targets stay within their requested maxima, every normal shutdown exits zero, and there are no SQL cancellations, OOM kills, swap use or remaining server processes. Filesystem cache still reaches the cgroup cap and produces memory.max events; these passes do not establish headroom for arbitrary concurrent workloads.
+
+The same acceptance check rejects all six earlier configuration controls because their observed allocator targets exceeded the requested maximum. Those unchanged-runtime traces are preserved in [the pressure investigation](../pool-pressure-2026-10-30/README.md). The legacy diagnostic label no-prefault means a request for a 16 MiB maximum; it does not disable prefaulting.
+
+This fixes configuration behavior. A lower default has not been selected, and this evidence makes no CPU, latency or memory-parity claim against PostgreSQL. The native PostgreSQL comparison and the four selected optimization targets remain separate qualification gates. The archive includes all six reports, exact source/configurations, commands, logs, source patch, binary hashes, positive checks and rejected controls.

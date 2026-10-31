@@ -57,19 +57,8 @@ pub enum Ctr {
     /// `ntuples2` of an INSERT ... ON CONFLICT's ModifyTable node (PostgreSQL's InstrCountTuples2 in ExecInsert): one per
     /// proposed row that met a conflict, DO NOTHING's skipped row or DO UPDATE's row the conflict arm took.
     Tuples2 = 18,
-    /// An Incremental Sort's IncrementalSortInfo (Full-sort, then Pre-sorted: groups, sort method bits, total and peak
-    /// kB), then the bytes of work_mem its replay needed and whether the rows read were not PostgreSQL's: ten cells its
-    /// top's finish adds from the replay (ops/sort/inc_replay.rs, in `Agg` order).
-    IncFullGroups = 19,
-    IncFullMethods = 20,
-    IncFullTotal = 21,
-    IncFullPeak = 22,
-    IncPreGroups = 23,
-    IncPreMethods = 24,
-    IncPreTotal = 25,
-    IncPrePeak = 26,
-    IncNeed = 27,
-    IncBad = 28,
+    // 19..=28 are reserved: retired PostgreSQL incremental-sort simulation
+    // counters. They were not measurements of Gravity's execution.
     /// D3500: the rows a MERGE's actions took, on its ModifyTable node (one per row reaching its write). Only a recheck
     /// node's count is read (driver node/raw.rs `fold_recheck`): the rows a write's recheck handed the actions in place of
     /// the one row it rechecks.
@@ -119,19 +108,6 @@ pub fn merge_split(mt: i32) {
     }
 }
 
-/// The Incremental Sort cells in the replay's word order (`Ctr::IncFullGroups` .. `Ctr::IncBad`).
-pub const INC_STATS: [Ctr; 10] = [
-    Ctr::IncFullGroups,
-    Ctr::IncFullMethods,
-    Ctr::IncFullTotal,
-    Ctr::IncFullPeak,
-    Ctr::IncPreGroups,
-    Ctr::IncPreMethods,
-    Ctr::IncPreTotal,
-    Ctr::IncPrePeak,
-    Ctr::IncNeed,
-    Ctr::IncBad,
-];
 
 /// EXPLAIN ANALYZE: Memoize `node`'s cache counter cells over the memo object in handle word `word` (`Ctr::Hits` ..
 /// `Ctr::MemoOf`, six cells in a row); nothing when the lowering is not instrumented or they are there.

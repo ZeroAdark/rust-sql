@@ -1,0 +1,2 @@
+# Preserve the exact downloaded patch hash on Windows and Linux checkouts.
+patches/postgresql/*.patch text eol=lf

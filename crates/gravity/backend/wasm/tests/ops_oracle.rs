@@ -4,7 +4,7 @@
 
 mod common;
 use common::*;
-use gravity_interp::canon;
+use gravity_interp::{canon, Interp};
 use gravity_ir::builder::{FunctionBuilder, ProgramBuilder};
 use gravity_ir::*;
 
@@ -67,6 +67,35 @@ fn sweep1(rig: &mut Rig, p: &Program, xs: &[i64]) -> usize {
         both(rig, p, &inst, Func(0), &[a as u64]);
     }
     xs.len()
+}
+
+// Rust's minNum/maxNum contract permits either operand when -0 and +0 compare
+// equal. Wasm picks a deterministic zero sign; the interpreter's Rust min/max
+// need not pick that same sign. Permit only this exact input pair, only for
+// min/max, and require each backend to return one of the input bit patterns.
+// Keep `both` bit-strict for arithmetic, copysign, conversions and all other pairs.
+fn sweep_minmax(rig: &mut Rig, p: &Program, ty: Type, xs: &[i64]) {
+    let (inst, _) = rig.instantiate(p, Func(0));
+    let zero = |bits: u64| match ty {
+        Type::F32 => f32::from_bits(bits as u32) == 0.0,
+        Type::F64 => f64::from_bits(bits) == 0.0,
+        _ => unreachable!(),
+    };
+    for &a in xs {
+        for &b in xs {
+            let args = [a as u64, b as u64];
+            if a != b && zero(args[0]) && zero(args[1]) {
+                let interpreted = Interp::new(p).run(Func(0), &args).expect("min/max interpreter");
+                let compiled = rig.call(&inst, p, Func(0), &args).expect("min/max wasm");
+                for result in [interpreted, compiled] {
+                    assert_eq!(result.len(), 1);
+                    assert!(args.contains(&result[0]), "min/max must return an input zero: {args:?} -> {result:?}");
+                }
+            } else {
+                both(rig, p, &inst, Func(0), &args);
+            }
+        }
+    }
 }
 
 #[test]
@@ -174,8 +203,14 @@ fn float_ops() {
     let b64: Vec<i64> = vals64.iter().map(|v| v.to_bits() as i64).collect();
     let b32: Vec<i64> = vals64.iter().map(|&v| (v as f32).to_bits() as i64).collect();
     for op in [FloatBinOp::Add, FloatBinOp::Sub, FloatBinOp::Mul, FloatBinOp::Div, FloatBinOp::Min, FloatBinOp::Max, FloatBinOp::Copysign] {
-        sweep2(&mut rig, &bin_fn(|b, x, y| b.float_bin(op, x, y), Type::F64, Type::F64), &b64, &b64);
-        sweep2(&mut rig, &bin_fn(|b, x, y| b.float_bin(op, x, y), Type::F32, Type::F32), &b32, &b32);
+        for (ty, xs) in [(Type::F64, &b64), (Type::F32, &b32)] {
+            let p = bin_fn(|b, x, y| b.float_bin(op, x, y), ty, ty);
+            if matches!(op, FloatBinOp::Min | FloatBinOp::Max) {
+                sweep_minmax(&mut rig, &p, ty, xs);
+            } else {
+                sweep2(&mut rig, &p, xs, xs);
+            }
+        }
     }
     for op in [FloatUnOp::Neg, FloatUnOp::Abs, FloatUnOp::Sqrt, FloatUnOp::Ceil, FloatUnOp::Floor, FloatUnOp::Trunc, FloatUnOp::Nearest] {
         sweep1(&mut rig, &un_fn(|b, x| b.float_un(op, x), Type::F64, Type::F64), &b64);

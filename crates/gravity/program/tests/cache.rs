@@ -126,8 +126,9 @@ fn l2_evicts_lru_by_bytes_and_count() {
     assert_eq!(c.stats().evictions, 1);
     let held = program(9, 1000);
     c.insert(None, held.clone());
-    assert_eq!(c.l2_len(), 1);
-    assert_eq!(c.l2_bytes(), 1000);
+    assert_eq!(c.l2_len(), 2, "an oversized program must not flush useful entries");
+    assert_eq!(c.l2_bytes(), 200);
+    assert!(c.l2(held.key).is_none());
     let mut small = ProgramCache::new(1 << 20, 2);
     let last = program(4, 1);
     for k in 0..4 {
@@ -136,7 +137,88 @@ fn l2_evicts_lru_by_bytes_and_count() {
     small.insert(None, last.clone());
     assert_eq!(small.l2_len(), 2);
     assert!(small.l2(last.key).is_some());
-    assert_eq!(Arc::strong_count(&held), 2);
+    assert_eq!(Arc::strong_count(&held), 1);
+}
+
+#[test]
+fn zero_limits_disable_l2_but_preserve_plan_ownership() {
+    for (budget, count) in [(0, 16), (100, 0), (0, 0)] {
+        let mut c = ProgramCache::new(budget, count);
+        let p = program(1, 0);
+        c.insert(Some(pk(1, 1)), p.clone());
+        c.install(p.key, p.clone());
+        assert_eq!((c.l2_len(), c.l2_bytes()), (0, 0));
+        assert!(Arc::ptr_eq(&c.l1(pk(1, 1)).unwrap(), &p));
+        assert_eq!(c.drop_for(Handle(1)), 1);
+    }
+}
+
+#[test]
+fn replacement_credits_old_bytes_before_eviction() {
+    let mut c = ProgramCache::new(200, 2);
+    let (a, b, replacement) = (program(1, 100), program(2, 100), program(3, 80));
+    c.insert(None, a.clone());
+    c.insert(None, b.clone());
+    c.install(b.key, replacement.clone());
+    assert_eq!((c.l2_len(), c.l2_bytes(), c.stats().evictions), (2, 180, 0));
+    assert!(c.l2(a.key).is_some());
+    assert!(Arc::ptr_eq(&c.l2(b.key).unwrap(), &replacement));
+    c.install(b.key, program(4, 201));
+    assert!(c.l2(b.key).is_none(), "an uncacheable replacement must not leave a stale front");
+    assert_eq!((c.l2_len(), c.l2_bytes()), (1, 100));
+}
+
+#[test]
+fn repeated_insert_refreshes_recency() {
+    let mut c = ProgramCache::new(100, 2);
+    let (a, b, d) = (program(1, 1), program(2, 1), program(3, 1));
+    c.insert(None, a.clone());
+    c.insert(None, b.clone());
+    c.insert(None, a.clone());
+    c.insert(None, d);
+    assert!(c.l2(a.key).is_some());
+    assert!(c.l2(b.key).is_none());
+}
+
+#[test]
+fn dense_lru_matches_a_simple_reference_model() {
+    // Exercise middle/head/tail replacement, index moves, multi-eviction and reset with a fixed seed.
+    let programs: Vec<_> = (0..12).map(|i| program(i + 1, (i as usize * 7) % 29)).collect();
+    let mut c = ProgramCache::new(70, 7);
+    let mut model: Vec<(gravity_program::program::ContentKey, Arc<Program>, usize)> = Vec::new();
+    let mut seed = 0x1234_5678u64;
+    for _ in 0..10_000 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let p = &programs[((seed >> 32) as usize) % programs.len()];
+        let front = programs[((seed >> 40) as usize) % programs.len()].key;
+        match seed % 11 {
+            0 => { c.reset(); model.clear(); }
+            1..=4 => {
+                let old = model.iter().position(|(k, _, _)| *k == p.key).map(|i| model.remove(i));
+                c.insert(None, p.clone());
+                if let Some(e) = old { model.push(e); } else {
+                    let bytes = p.code_bytes();
+                    while model.len() >= 7 || model.iter().map(|e| e.2).sum::<usize>() + bytes > 70 { model.remove(0); }
+                    model.push((p.key, p.clone(), bytes));
+                }
+            }
+            5..=8 => {
+                c.install(front, p.clone());
+                if let Some(i) = model.iter().position(|e| e.0 == front) { model.remove(i); }
+                let bytes = p.code_bytes();
+                while model.len() >= 7 || model.iter().map(|e| e.2).sum::<usize>() + bytes > 70 { model.remove(0); }
+                model.push((front, p.clone(), bytes));
+            }
+            _ => {
+                let actual = c.l2(front);
+                let expected = model.iter().position(|e| e.0 == front).map(|i| model.remove(i));
+                assert_eq!(actual.as_ref().map(|p| p.key), expected.as_ref().map(|e| e.1.key));
+                if let Some(e) = expected { model.push(e); }
+            }
+        }
+        assert_eq!(c.l2_len(), model.len());
+        assert_eq!(c.l2_bytes(), model.iter().map(|e| e.2).sum::<usize>());
+    }
 }
 
 /// D2948 (D1360's debug W8 sweep: cr_cap34_kernel_words_wide, cr_cap36_setop_slots): a tier-0 program is filed with the

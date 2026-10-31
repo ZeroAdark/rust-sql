@@ -123,6 +123,11 @@ pub(crate) fn reset_release_stage() {
 /// pppress card 10: the idle timer after a tail cut. `mempolicy::keep::IDLE_TAIL_SLICE_MS` while it stopped with runs
 /// left (the passivation delay's `rest` then starts once the cut is done), else `rest` (0: nothing).
 fn arm_after_tails(more: bool, rest: i32) -> PgResult<()> {
+    // The idle timer has fired. Share current runs once any sliced tail walk has finished using this heap.
+    // This keeps allocator ownership transfers off the path between commands without an idle gap.
+    if !more {
+        pagepool::idle_point();
+    }
     TAIL_REST.with(|c| c.set(if more { rest.max(0) } else { -1 }));
     let ms = if more { mempolicy::keep::IDLE_TAIL_SLICE_MS } else { rest };
     if ms > 0 {

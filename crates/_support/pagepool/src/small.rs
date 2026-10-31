@@ -95,7 +95,7 @@ struct Heap {
     state: Cell<u8>,
     cur: [Cell<*mut Run>; NCLS],
     ccur: [Cell<*mut Run>; NCLS],
-    /// A current cache run or a pending remote free since the last idle point (its one-load test).
+    /// A current cache run or a pending remote free since the last idle point.
     busy: Cell<bool>,
     partial: [Cell<*mut Run>; NCLS],
     full: [Cell<*mut Run>; NCLS],
@@ -991,10 +991,17 @@ fn index(r: *mut Run) -> u32 {
 
 /// A run leaving this heap: to the pool when every block is home, else (and a cache run always) onto an abandoned list.
 unsafe fn release(r: *mut Run, c: usize) {
+    // SAFETY: preserve the caller's detached-run ownership contract.
+    unsafe { release_run(r, c, false) };
+}
+
+/// An idle handoff keeps empty runs formatted for the next taker; a reclamation sweep can still return them.
+unsafe fn release_run(r: *mut Run, c: usize, keep_empty: bool) {
     // SAFETY: the caller's: a run of ours, off every list.
     unsafe {
         collect(r);
-        if (*r).used == 0 && (*r).kind != CACHE {
+        // A failed reservation has no purger to reclaim empty system-backed cache runs.
+        if (*r).used == 0 && ((!keep_empty && (*r).kind != CACHE) || !crate::owns(r.cast())) {
             give_run(r);
         } else {
             (*r).state = FLOAT;
@@ -1320,17 +1327,28 @@ pub(crate) fn thread_retained() -> usize {
     sum
 }
 
-/// The session's idle point: this thread's current cache runs leave it (onto the cache lists) and its pending remote
-/// frees go out, so nothing a cut empties waits on this thread. No allocation, no syscall.
+/// Hand current runs to the adoption lists before this thread parks. Live blocks stay valid, while another thread
+/// can reuse the remaining slots. Flush pending remote frees too. The scan is bounded by the fixed size classes;
+/// partial and full lists stay owned until a later trim or thread exit. No allocation, no syscall.
 pub(crate) fn idle_point() {
     let h = heap();
-    if !h.busy.replace(false) || h.state.get() != LIVE {
+    if h.state.get() != LIVE {
         return;
     }
-    flush_all_pending(h);
+    // General runs have no per-acquisition idle bookkeeping: scan their fixed slots here instead.
+    if h.busy.replace(false) {
+        flush_all_pending(h);
+    }
     for c in 0..NCLS {
+        let r = h.cur[c].get();
+        // System fallbacks have no guaranteed purger. Keep them local so thread exit can free empty runs.
+        if r != empty() && crate::owns(r.cast()) {
+            h.cur[c].set(empty());
+            // SAFETY: this heap's current general run; detach before publishing it to other threads.
+            unsafe { release_run(r, c, true) };
+        }
         let r = h.ccur[c].get();
-        if r != empty() {
+        if r != empty() && crate::owns(r.cast()) {
             h.ccur[c].set(empty());
             // SAFETY: this heap's current cache run.
             unsafe { release(r, c) };
@@ -1372,7 +1390,7 @@ pub(crate) fn sweep_abandoned() -> usize {
     n
 }
 
-/// Runs taken from the pool, adopted from dead threads, reused as a spare, given back, and left by exiting threads.
+/// Runs taken from the pool, adopted from idle or dead threads, reused as a spare, given back, and handed off.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SmallCounts {
     pub fresh: u64,

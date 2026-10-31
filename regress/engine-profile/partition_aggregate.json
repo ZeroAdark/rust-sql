@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "reason": "Partition aggregates use engine whole-input aggregation and append paths instead of PostgreSQL partial/final worker aggregation; GROUP BY, HAVING and ordered results remain unchanged.",
+  "source_sha256": "c7fc794f5e2ad886b2fc4f9c68edcb463fc902f83fbb417e457a65f561ecc48c",
+  "expected_sha256": "cd126a9bc3fa87506d2778d104ffc8fcdf3cc29f0729b016ff1abd9e43ba0d3f",
+  "plans": [
+    {
+      "sql_sha256": "1f61b910251dd559c5b6a0e6e2f4837f3e8b7a3767d506729c662d478eea42b0",
+      "occurrence": 1,
+      "sql_line": 34,
+      "before_sha256": "30ba3cd01b52658f7283ffb47fdd6f2afcbcf774e992f8eae303415ae52e72d9",
+      "after": "                          QUERY PLAN                          \n--------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab.a, (sum(pagg_tab.b)), (avg(pagg_tab.b))\n   ->  HashAggregate\n         Group Key: pagg_tab.a\n         Filter: (avg(pagg_tab.d) < '15'::numeric)\n         ->  Append\n               ->  Seq Scan on pagg_tab_p1 pagg_tab_1\n               ->  Seq Scan on pagg_tab_p2 pagg_tab_2\n               ->  Seq Scan on pagg_tab_p3 pagg_tab_3\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "58531d1d143287c1849ded8c5655180bb442ccb726f4c7ef0f8919b3929bcec4",
+      "occurrence": 1,
+      "sql_line": 65,
+      "before_sha256": "9e2aa1c8ad81e8ba1c333a0a44e7e0306b193ea80a12b99b967ac43af05c2b9a",
+      "after": "                          QUERY PLAN                          \n--------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab.a, (sum(pagg_tab.b)), (avg(pagg_tab.b))\n   ->  GroupAggregate\n         Group Key: pagg_tab.a\n         Filter: (avg(pagg_tab.d) < '15'::numeric)\n         ->  Sort\n               Sort Key: pagg_tab.a\n               ->  Append\n                     ->  Seq Scan on pagg_tab_p1 pagg_tab_1\n                     ->  Seq Scan on pagg_tab_p2 pagg_tab_2\n                     ->  Seq Scan on pagg_tab_p3 pagg_tab_3\n(11 rows)\n"
+    },
+    {
+      "sql_sha256": "479b8db1c000574e95759bf1b0fc38ed0224955543f4bbb624bf03985c2b9004",
+      "occurrence": 1,
+      "sql_line": 73,
+      "before_sha256": "a7b0abbb4e0143e1446190df03779433daf6bcba9cd89288030fe387f73d134e",
+      "after": "                      QUERY PLAN                      \n------------------------------------------------------\n Group\n   Group Key: pagg_tab.a\n   ->  Sort\n         Sort Key: pagg_tab.a\n         ->  Append\n               ->  Seq Scan on pagg_tab_p1 pagg_tab_1\n                     Filter: (a < 3)\n               ->  Seq Scan on pagg_tab_p2 pagg_tab_2\n                     Filter: (a < 3)\n               ->  Seq Scan on pagg_tab_p3 pagg_tab_3\n                     Filter: (a < 3)\n(11 rows)\n"
+    },
+    {
+      "sql_sha256": "bae161e111e0b4e49100375f12136c820dacea56b8d3d5e99b060d5fe7eaa301",
+      "occurrence": 1,
+      "sql_line": 136,
+      "before_sha256": "7e02b2536cd26264df1f021f34e484e1751f099dd755b05552ecabe2448c6927",
+      "after": "                            QUERY PLAN                             \n-------------------------------------------------------------------\n Sort\n   Sort Key: t1.y, (sum(t1.x)), (count(*))\n   ->  GroupAggregate\n         Group Key: t1.y\n         Filter: (avg(t1.x) > '10'::numeric)\n         ->  Sort\n               Sort Key: t1.y\n               ->  Append\n                     ->  Hash Join\n                           Hash Cond: (t1_1.x = t2_1.y)\n                           ->  Seq Scan on pagg_tab1_p1 t1_1\n                           ->  Hash\n                                 ->  Seq Scan on pagg_tab2_p1 t2_1\n                     ->  Hash Join\n                           Hash Cond: (t1_2.x = t2_2.y)\n                           ->  Seq Scan on pagg_tab1_p2 t1_2\n                           ->  Hash\n                                 ->  Seq Scan on pagg_tab2_p2 t2_2\n                     ->  Hash Join\n                           Hash Cond: (t2_3.y = t1_3.x)\n                           ->  Seq Scan on pagg_tab2_p3 t2_3\n                           ->  Hash\n                                 ->  Seq Scan on pagg_tab1_p3 t1_3\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "02bf162fb1031a467eb3e35d3071b815712146bcc46924b27e81b047e39e463f",
+      "occurrence": 1,
+      "sql_line": 146,
+      "before_sha256": "51e3674b5e33d44419a7df7551ad632f75337d0b8834242a237f3950e118257b",
+      "after": "                         QUERY PLAN                         \n------------------------------------------------------------\n Sort\n   Sort Key: b.y\n   ->  HashAggregate\n         Group Key: b.y\n         ->  Append\n               ->  Hash Left Join\n                     Hash Cond: (a_1.x = b_1.y)\n                     ->  Seq Scan on pagg_tab1_p1 a_1\n                     ->  Hash\n                           ->  Seq Scan on pagg_tab2_p1 b_1\n               ->  Hash Left Join\n                     Hash Cond: (a_2.x = b_2.y)\n                     ->  Seq Scan on pagg_tab1_p2 a_2\n                     ->  Hash\n                           ->  Seq Scan on pagg_tab2_p2 b_2\n               ->  Hash Right Join\n                     Hash Cond: (b_3.y = a_3.x)\n                     ->  Seq Scan on pagg_tab2_p3 b_3\n                     ->  Hash\n                           ->  Seq Scan on pagg_tab1_p3 a_3\n(20 rows)\n"
+    },
+    {
+      "sql_sha256": "9ca30df6de8168accbd0c1f2cbdf2784e5bb93e317152759c9a78c007aee3eea",
+      "occurrence": 1,
+      "sql_line": 158,
+      "before_sha256": "5db2805dd31171f310a91e8515f84b71501f7bc2a19860a994c9b0e9bb172307",
+      "after": "                         QUERY PLAN                         \n------------------------------------------------------------\n Sort\n   Sort Key: a.x\n   ->  HashAggregate\n         Group Key: a.x\n         ->  Append\n               ->  Hash Full Join\n                     Hash Cond: (a_1.x = b_1.y)\n                     ->  Seq Scan on pagg_tab1_p1 a_1\n                     ->  Hash\n                           ->  Seq Scan on pagg_tab2_p1 b_1\n               ->  Hash Full Join\n                     Hash Cond: (a_2.x = b_2.y)\n                     ->  Seq Scan on pagg_tab1_p2 a_2\n                     ->  Hash\n                           ->  Seq Scan on pagg_tab2_p2 b_2\n               ->  Hash Full Join\n                     Hash Cond: (b_3.y = a_3.x)\n                     ->  Seq Scan on pagg_tab2_p3 b_3\n                     ->  Hash\n                           ->  Seq Scan on pagg_tab1_p3 a_3\n(20 rows)\n"
+    },
+    {
+      "sql_sha256": "e30b91b9106f5c4c110cc00b7eddabaecab7704456974428a045a9c60101f00e",
+      "occurrence": 1,
+      "sql_line": 194,
+      "before_sha256": "3b75b52110a05d491c28d07bd3fa30bb983fe557278245ba8eb6e4b92cf29f09",
+      "after": "                             QUERY PLAN                             \n--------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_m.a, (sum(pagg_tab_m.b)), (avg(pagg_tab_m.c))\n   ->  HashAggregate\n         Group Key: pagg_tab_m.a\n         Filter: (avg(pagg_tab_m.c) < '22'::numeric)\n         ->  Append\n               ->  Seq Scan on pagg_tab_m_p1 pagg_tab_m_1\n               ->  Seq Scan on pagg_tab_m_p2 pagg_tab_m_2\n               ->  Seq Scan on pagg_tab_m_p3 pagg_tab_m_3\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "f6a851f12db67196464a2cf4778db28a1498a699a36b07357d6384627467af44",
+      "occurrence": 1,
+      "sql_line": 236,
+      "before_sha256": "44dc0ea72b4d644f55e30e35412adcd735c338eeebc44683ba870c5cc8871bf1",
+      "after": "                                      QUERY PLAN                                      \n--------------------------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_ml.a, (sum(pagg_tab_ml.b)), (array_agg(DISTINCT pagg_tab_ml.c))\n   ->  Append\n         ->  GroupAggregate\n               Group Key: pagg_tab_ml.a\n               Filter: (avg(pagg_tab_ml.b) < '3'::numeric)\n               ->  Sort\n                     Sort Key: pagg_tab_ml.a, pagg_tab_ml.c\n                     ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml\n         ->  GroupAggregate\n               Group Key: pagg_tab_ml_2.a\n               Filter: (avg(pagg_tab_ml_2.b) < '3'::numeric)\n               ->  Sort\n                     Sort Key: pagg_tab_ml_2.a, pagg_tab_ml_2.c\n                     ->  Append\n                           ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2\n                           ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3\n         ->  GroupAggregate\n               Group Key: pagg_tab_ml_5.a\n               Filter: (avg(pagg_tab_ml_5.b) < '3'::numeric)\n               ->  Sort\n                     Sort Key: pagg_tab_ml_5.a, pagg_tab_ml_5.c\n                     ->  Append\n                           ->  Seq Scan on pagg_tab_ml_p3_s1 pagg_tab_ml_5\n                           ->  Seq Scan on pagg_tab_ml_p3_s2 pagg_tab_ml_6\n(25 rows)\n"
+    },
+    {
+      "sql_sha256": "410ebc5647f2b253a3e9d918dcd93a5f8fc777cc7e8aeccce72a1eeaf46ebee9",
+      "occurrence": 1,
+      "sql_line": 241,
+      "before_sha256": "724a2c7564aed32395646a7534477188dcc94b10d72f429a83ff06fd05499ac2",
+      "after": "                             QUERY PLAN                              \n---------------------------------------------------------------------\n Append\n   ->  GroupAggregate\n         Group Key: pagg_tab_ml.a\n         Filter: (avg(pagg_tab_ml.b) < '3'::numeric)\n         ->  Sort\n               Sort Key: pagg_tab_ml.a, pagg_tab_ml.c\n               ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml\n   ->  GroupAggregate\n         Group Key: pagg_tab_ml_2.a\n         Filter: (avg(pagg_tab_ml_2.b) < '3'::numeric)\n         ->  Sort\n               Sort Key: pagg_tab_ml_2.a, pagg_tab_ml_2.c\n               ->  Append\n                     ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2\n                     ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3\n   ->  GroupAggregate\n         Group Key: pagg_tab_ml_5.a\n         Filter: (avg(pagg_tab_ml_5.b) < '3'::numeric)\n         ->  Sort\n               Sort Key: pagg_tab_ml_5.a, pagg_tab_ml_5.c\n               ->  Append\n                     ->  Seq Scan on pagg_tab_ml_p3_s1 pagg_tab_ml_5\n                     ->  Seq Scan on pagg_tab_ml_p3_s2 pagg_tab_ml_6\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "ff2d28dd4e1066968e24251d5157f6a07789865c417129476f2905dcbb07f6b2",
+      "occurrence": 1,
+      "sql_line": 249,
+      "before_sha256": "08b1a70a9b48aa23e4a75c784a2d4f20d3e14d2adf5aeee39885f3ddf0a6721a",
+      "after": "                             QUERY PLAN                              \n---------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_ml.a, (sum(pagg_tab_ml.b)), (count(*))\n   ->  Append\n         ->  HashAggregate\n               Group Key: pagg_tab_ml.a\n               Filter: (avg(pagg_tab_ml.b) < '3'::numeric)\n               ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_2.a\n               Filter: (avg(pagg_tab_ml_2.b) < '3'::numeric)\n               ->  Append\n                     ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2\n                     ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_5.a\n               Filter: (avg(pagg_tab_ml_5.b) < '3'::numeric)\n               ->  Append\n                     ->  Seq Scan on pagg_tab_ml_p3_s1 pagg_tab_ml_5\n                     ->  Seq Scan on pagg_tab_ml_p3_s2 pagg_tab_ml_6\n(19 rows)\n"
+    },
+    {
+      "sql_sha256": "99045f04031b1b0ad16acc06a53414bbee1f8b6d5e84b92475d476f592231dc9",
+      "occurrence": 1,
+      "sql_line": 255,
+      "before_sha256": "c9d88abd6c36f2495e1fff1bac83a57821b1e96b9181c0fcb0f8c8c2ec43cc30",
+      "after": "                          QUERY PLAN                           \n---------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_ml.b, (sum(pagg_tab_ml.a)), (count(*))\n   ->  HashAggregate\n         Group Key: pagg_tab_ml.b\n         ->  Append\n               ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml_1\n               ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2\n               ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3\n               ->  Seq Scan on pagg_tab_ml_p3_s1 pagg_tab_ml_4\n               ->  Seq Scan on pagg_tab_ml_p3_s2 pagg_tab_ml_5\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "ff2d28dd4e1066968e24251d5157f6a07789865c417129476f2905dcbb07f6b2",
+      "occurrence": 2,
+      "sql_line": 272,
+      "before_sha256": "da1494a764e49368dec83c6a329025623c6c920e735c0f14bf6380169adb2e41",
+      "after": "                             QUERY PLAN                              \n---------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_ml.a, (sum(pagg_tab_ml.b)), (count(*))\n   ->  Append\n         ->  HashAggregate\n               Group Key: pagg_tab_ml.a\n               Filter: (avg(pagg_tab_ml.b) < '3'::numeric)\n               ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_2.a\n               Filter: (avg(pagg_tab_ml_2.b) < '3'::numeric)\n               ->  Append\n                     ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2\n                     ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_5.a\n               Filter: (avg(pagg_tab_ml_5.b) < '3'::numeric)\n               ->  Append\n                     ->  Seq Scan on pagg_tab_ml_p3_s1 pagg_tab_ml_5\n                     ->  Seq Scan on pagg_tab_ml_p3_s2 pagg_tab_ml_6\n(19 rows)\n"
+    },
+    {
+      "sql_sha256": "99045f04031b1b0ad16acc06a53414bbee1f8b6d5e84b92475d476f592231dc9",
+      "occurrence": 2,
+      "sql_line": 278,
+      "before_sha256": "11a2066f595715f92259907b3b15a4cb7ef81d974dce85d5cfdea860314562a3",
+      "after": "                          QUERY PLAN                           \n---------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_ml.b, (sum(pagg_tab_ml.a)), (count(*))\n   ->  HashAggregate\n         Group Key: pagg_tab_ml.b\n         ->  Append\n               ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml_1\n               ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_2\n               ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_3\n               ->  Seq Scan on pagg_tab_ml_p3_s1 pagg_tab_ml_4\n               ->  Seq Scan on pagg_tab_ml_p3_s2 pagg_tab_ml_5\n(10 rows)\n"
+    },
+    {
+      "sql_sha256": "920cd89bfdf9e529f59aa7c0df395342e9fd32cac450b47138ab8fb1efc84120",
+      "occurrence": 2,
+      "sql_line": 283,
+      "before_sha256": "1a58ff635e84b03c8daa2eabf310f2c7b2371523c264b76af43b193801881897",
+      "after": "                                 QUERY PLAN                                 \n----------------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_ml.a, (sum(pagg_tab_ml.b)), (count(*))\n   ->  Append\n         ->  HashAggregate\n               Group Key: pagg_tab_ml.a, pagg_tab_ml.b, pagg_tab_ml.c\n               Filter: (avg(pagg_tab_ml.b) > '7'::numeric)\n               ->  Seq Scan on pagg_tab_ml_p1 pagg_tab_ml\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_1.a, pagg_tab_ml_1.b, pagg_tab_ml_1.c\n               Filter: (avg(pagg_tab_ml_1.b) > '7'::numeric)\n               ->  Seq Scan on pagg_tab_ml_p2_s1 pagg_tab_ml_1\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_2.a, pagg_tab_ml_2.b, pagg_tab_ml_2.c\n               Filter: (avg(pagg_tab_ml_2.b) > '7'::numeric)\n               ->  Seq Scan on pagg_tab_ml_p2_s2 pagg_tab_ml_2\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_3.a, pagg_tab_ml_3.b, pagg_tab_ml_3.c\n               Filter: (avg(pagg_tab_ml_3.b) > '7'::numeric)\n               ->  Seq Scan on pagg_tab_ml_p3_s1 pagg_tab_ml_3\n         ->  HashAggregate\n               Group Key: pagg_tab_ml_4.a, pagg_tab_ml_4.b, pagg_tab_ml_4.c\n               Filter: (avg(pagg_tab_ml_4.b) > '7'::numeric)\n               ->  Seq Scan on pagg_tab_ml_p3_s2 pagg_tab_ml_4\n(23 rows)\n"
+    },
+    {
+      "sql_sha256": "f4bb6fd6a9f6905d54f7b3b579e146bc53ec5461a62ee8c17ba332834ff2d71b",
+      "occurrence": 1,
+      "sql_line": 309,
+      "before_sha256": "2d7a3dabad3c12173faafd8b490c790f8feb06e33ceb3a552617a98136412eb6",
+      "after": "                                 QUERY PLAN                                  \n-----------------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_para.x, (sum(pagg_tab_para.y)), (avg(pagg_tab_para.y))\n   ->  Append\n         ->  HashAggregate\n               Group Key: pagg_tab_para.x\n               Filter: (avg(pagg_tab_para.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p1 pagg_tab_para\n         ->  HashAggregate\n               Group Key: pagg_tab_para_1.x\n               Filter: (avg(pagg_tab_para_1.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p2 pagg_tab_para_1\n         ->  HashAggregate\n               Group Key: pagg_tab_para_2.x\n               Filter: (avg(pagg_tab_para_2.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p3 pagg_tab_para_2\n(15 rows)\n"
+    },
+    {
+      "sql_sha256": "81c3c7fd84879a147fa5c19c18e1bbcbdb5503164e5050ab896f5480feb6afd4",
+      "occurrence": 1,
+      "sql_line": 314,
+      "before_sha256": "5eb8f21a6aec48f0911a64fe30975a1e8f97961287dad52e4027fbf361727feb",
+      "after": "                                 QUERY PLAN                                  \n-----------------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_para.y, (sum(pagg_tab_para.x)), (avg(pagg_tab_para.x))\n   ->  HashAggregate\n         Group Key: pagg_tab_para.y\n         Filter: (avg(pagg_tab_para.x) < '12'::numeric)\n         ->  Append\n               ->  Seq Scan on pagg_tab_para_p1 pagg_tab_para_1\n               ->  Seq Scan on pagg_tab_para_p2 pagg_tab_para_2\n               ->  Seq Scan on pagg_tab_para_p3 pagg_tab_para_3\n(9 rows)\n"
+    },
+    {
+      "sql_sha256": "d736454309f4c3f6e49613e420c4a241daec3017d644970fa17e2a32289e5c32",
+      "occurrence": 1,
+      "sql_line": 324,
+      "before_sha256": "0f91d0d26ed34f0575afbaa3c5e731484e06e3aa2a07f4bc60c8aedc467f702a",
+      "after": "                                 QUERY PLAN                                  \n-----------------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_para.x, (sum(pagg_tab_para.y)), (avg(pagg_tab_para.y))\n   ->  Append\n         ->  HashAggregate\n               Group Key: pagg_tab_para.x\n               Filter: (avg(pagg_tab_para.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p1 pagg_tab_para\n         ->  HashAggregate\n               Group Key: pagg_tab_para_1.x\n               Filter: (avg(pagg_tab_para_1.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p2 pagg_tab_para_1\n         ->  HashAggregate\n               Group Key: pagg_tab_para_2.x\n               Filter: (avg(pagg_tab_para_2.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p3 pagg_tab_para_2\n(15 rows)\n"
+    },
+    {
+      "sql_sha256": "d736454309f4c3f6e49613e420c4a241daec3017d644970fa17e2a32289e5c32",
+      "occurrence": 2,
+      "sql_line": 331,
+      "before_sha256": "b966e2c98d8a4190932f9a3a83efbe1d4321cd5247d1dd92694765aa460a1461",
+      "after": "                                 QUERY PLAN                                  \n-----------------------------------------------------------------------------\n Sort\n   Sort Key: pagg_tab_para.x, (sum(pagg_tab_para.y)), (avg(pagg_tab_para.y))\n   ->  Append\n         ->  HashAggregate\n               Group Key: pagg_tab_para.x\n               Filter: (avg(pagg_tab_para.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p1 pagg_tab_para\n         ->  HashAggregate\n               Group Key: pagg_tab_para_1.x\n               Filter: (avg(pagg_tab_para_1.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p2 pagg_tab_para_1\n         ->  HashAggregate\n               Group Key: pagg_tab_para_2.x\n               Filter: (avg(pagg_tab_para_2.y) < '7'::numeric)\n               ->  Seq Scan on pagg_tab_para_p3 pagg_tab_para_2\n(15 rows)\n"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "decision": "advance-to-runtime-validation",
+  "promoted": false,
+  "production_qualified": false,
+  "candidate_sha256": "635ec740b3cd85c4318eadc87843705032494a49d92d1deeb79b09a8c5ab9e57",
+  "accepted_sha256": "0be60915b40c9f70f39dcb3a0fd1f8918608a20095f767ec081a5b5320caa277",
+  "pressure_candidate_passes": 6,
+  "performance_preservation_passed": true,
+  "remaining": [
+    "SQL/isolation/protocol and recovery checks on this exact binary",
+    "positive-budget sort checks",
+    "PostgreSQL memory/read/update parity",
+    "broader production operational gates"
+  ]
+}

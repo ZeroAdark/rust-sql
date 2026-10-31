@@ -61,7 +61,7 @@
 //! - `connection_queue_size = 0` (queue off) and `band = 0` keep today's
 //!   behavior exactly, claim or not.
 
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Condvar, Mutex};
@@ -78,10 +78,48 @@ struct Waiter {
 }
 
 struct Queue {
-    waiters: VecDeque<Arc<Waiter>>,
+    // Only unsignaled waiters are in this map. A signaled waiter still
+    // owns capacity until its QueueGuard exits, even while off the map.
+    waiters: BTreeMap<u64, Arc<Waiter>>,
+    pending: usize,
+    next_ticket: u64,
 }
 
-static QUEUE: Mutex<Queue> = Mutex::new(Queue { waiters: VecDeque::new() });
+impl Queue {
+    const fn new() -> Self {
+        Self { waiters: BTreeMap::new(), pending: 0, next_ticket: 0 }
+    }
+
+    fn enter(&mut self, waiter: Arc<Waiter>, limit: usize) -> Option<u64> {
+        if self.pending >= limit {
+            return None;
+        }
+        // Never wrap a live ticket or reuse its FIFO position.
+        let next = self.next_ticket.checked_add(1)?;
+        let ticket = self.next_ticket;
+        self.waiters.insert(ticket, waiter);
+        self.next_ticket = next;
+        self.pending += 1;
+        Some(ticket)
+    }
+
+    fn wake(&mut self) -> Option<(u64, Arc<Waiter>)> {
+        self.waiters.pop_first()
+    }
+
+    fn requeue(&mut self, ticket: u64, waiter: &Arc<Waiter>) {
+        // The original ticket preserves order when several wake tokens
+        // lose a freelist race and their threads resume in another order.
+        self.waiters.entry(ticket).or_insert_with(|| Arc::clone(waiter));
+    }
+
+    fn leave(&mut self, ticket: u64) -> bool {
+        self.pending -= 1;
+        self.waiters.remove(&ticket).is_some()
+    }
+}
+
+static QUEUE: Mutex<Queue> = Mutex::new(Queue::new());
 
 // Stats (readable via `pgrust: admission stats` in tcop simple-query).
 static TOTAL_QUEUED: AtomicU64 = AtomicU64::new(0);
@@ -96,7 +134,7 @@ fn lock_queue() -> std::sync::MutexGuard<'static, Queue> {
 /// The InitProcess fast-path barge guard reads this: while waiters exist,
 /// newcomers must join the tail instead of popping past them.
 pub fn queued_count() -> usize {
-    lock_queue().waiters.len()
+    lock_queue().pending
 }
 
 pub fn enabled() -> bool {
@@ -267,9 +305,9 @@ pub fn stats() -> (usize, u64, u64, u64, u64) {
 pub(crate) fn slot_released() {
     let waiter = {
         let mut q = lock_queue();
-        q.waiters.pop_front()
+        q.wake()
     };
-    if let Some(w) = waiter {
+    if let Some((_ticket, w)) = waiter {
         let mut g = w.granted.lock().unwrap_or_else(|e| e.into_inner());
         *g = true;
         w.cv.notify_one();
@@ -289,6 +327,7 @@ fn too_many_error() -> Box<PgError> {
 /// pq_check_connection: dequeue self, and pass an unconsumed wake token to
 /// the next waiter so a freed slot's grant never dies with us.
 struct QueueGuard {
+    ticket: u64,
     me: Arc<Waiter>,
     consumed_token: bool,
 }
@@ -297,13 +336,7 @@ impl Drop for QueueGuard {
     fn drop(&mut self) {
         let was_queued = {
             let mut q = lock_queue();
-            match q.waiters.iter().position(|w| Arc::ptr_eq(w, &self.me)) {
-                Some(pos) => {
-                    q.waiters.remove(pos);
-                    true
-                }
-                None => false,
-            }
+            q.leave(self.ticket)
         };
         if !was_queued && !self.consumed_token {
             // We were popped by slot_released but are leaving without using
@@ -329,15 +362,15 @@ pub(crate) fn queue_for_slot(
     let timeout_ms = guc_tables::backing::connection_queue_timeout();
 
     let me = Arc::new(Waiter { granted: Mutex::new(false), cv: Condvar::new() });
-    let depth = {
+    let (ticket, depth) = {
         let mut q = lock_queue();
-        if q.waiters.len() >= queue_size {
-            // Bounded: beyond the queue, today's immediate behavior.
-            return Err(too_many_error());
-        }
-        q.waiters.push_back(Arc::clone(&me));
-        q.waiters.len()
+        // Capacity includes signaled waiters that have not acquired a
+        // PGPROC yet. A wake token must not open a hole in the bound.
+        let ticket = q.enter(Arc::clone(&me), queue_size).ok_or_else(too_many_error)?;
+        (ticket, q.pending)
     };
+    // Arm cleanup before logging or any other fallible operation.
+    let mut guard = QueueGuard { ticket, me: Arc::clone(&me), consumed_token: false };
     TOTAL_QUEUED.fetch_add(1, Relaxed);
     let entered = Instant::now();
     let deadline =
@@ -348,8 +381,6 @@ pub(crate) fn queue_for_slot(
             "connection admission queue: entered (depth {depth} of {queue_size}, timeout {timeout_ms} ms)"
         ),
     );
-
-    let mut guard = QueueGuard { me: Arc::clone(&me), consumed_token: false };
 
     loop {
         // Shutdown / termination FIRST — during a shutdown cascade freed
@@ -437,12 +468,10 @@ pub(crate) fn queue_for_slot(
         if woken_by_token {
             // slot_released popped us off the queue with the token. If the
             // pop retry above us loses a race, we must be findable again —
-            // and at the FRONT, keeping our FIFO position. A successful pop
+            // at our original FIFO position. A successful pop
             // just removes us via the guard as usual.
             let mut q = lock_queue();
-            if !q.waiters.iter().any(|w| Arc::ptr_eq(w, &me)) {
-                q.waiters.push_front(Arc::clone(&me));
-            }
+            q.requeue(ticket, &me);
         }
     }
 }
@@ -450,6 +479,96 @@ pub(crate) fn queue_for_slot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waking_waiter_keeps_its_capacity_until_exit() {
+        let me = Arc::new(Waiter { granted: Mutex::new(false), cv: Condvar::new() });
+        let ticket = lock_queue().enter(Arc::clone(&me), 1).unwrap();
+        let guard = QueueGuard { ticket, me: Arc::clone(&me), consumed_token: false };
+        assert_eq!(queued_count(), 1);
+        slot_released();
+        assert_eq!(queued_count(), 1, "a wake token is not an admitted connection");
+        assert!(lock_queue().enter(me, 1).is_none(), "waking must not admit overflow");
+        drop(guard);
+        assert_eq!(queued_count(), 0);
+    }
+
+    fn waiter() -> Arc<Waiter> {
+        Arc::new(Waiter { granted: Mutex::new(false), cv: Condvar::new() })
+    }
+
+    #[test]
+    fn requeue_retains_fifo_order_and_capacity() {
+        let mut q = Queue::new();
+        let a = q.enter(waiter(), 3).unwrap();
+        let b = q.enter(waiter(), 3).unwrap();
+        let c = q.enter(waiter(), 3).unwrap();
+        let (ta, wa) = q.wake().unwrap();
+        let (tb, wb) = q.wake().unwrap();
+        assert_eq!((ta, tb, q.pending), (a, b, 3));
+        assert!(q.enter(waiter(), 3).is_none());
+        q.requeue(tb, &wb);
+        q.requeue(ta, &wa);
+        q.requeue(ta, &wa); // Idempotent rechecks must not add capacity.
+        assert!(q.leave(b)); // Cancel the middle waiter without a scan.
+        assert_eq!(q.wake().unwrap().0, a);
+        assert!(!q.leave(a));
+        assert_eq!(q.wake().unwrap().0, c);
+        assert!(!q.leave(c));
+        assert_eq!(q.pending, 0);
+        assert!(q.waiters.is_empty());
+    }
+
+    #[test]
+    fn pending_capacity_matches_interleaved_lifecycle_model() {
+        let mut q = Queue::new();
+        let mut live: Vec<(u64, Arc<Waiter>, bool)> = Vec::new();
+        let mut seed = 0x436f_6e6e_7175_6575_u64;
+        for _ in 0..20_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            match seed % 4 {
+                0 => {
+                    let w = waiter();
+                    let ticket = q.enter(Arc::clone(&w), 17);
+                    assert_eq!(ticket.is_some(), live.len() < 17);
+                    if let Some(t) = ticket { live.push((t, w, true)); }
+                }
+                1 => {
+                    let expected = live.iter_mut().filter(|v| v.2).min_by_key(|v| v.0);
+                    let got = q.wake();
+                    assert_eq!(got.as_ref().map(|v| v.0), expected.as_ref().map(|v| v.0));
+                    if let Some(value) = expected { value.2 = false; }
+                }
+                2 if !live.is_empty() => {
+                    let index = seed as usize % live.len();
+                    let (t, w, waiting) = &mut live[index];
+                    q.requeue(*t, w);
+                    *waiting = true;
+                }
+                3 if !live.is_empty() => {
+                    let (t, _, waiting) = live.swap_remove(seed as usize % live.len());
+                    assert_eq!(q.leave(t), waiting);
+                }
+                _ => {}
+            }
+            assert_eq!(q.pending, live.len());
+            assert_eq!(q.waiters.len(), live.iter().filter(|v| v.2).count());
+        }
+        for (ticket, _, _) in live { q.leave(ticket); }
+        assert_eq!(q.pending, 0);
+        assert!(q.waiters.is_empty());
+    }
+
+    #[test]
+    fn exhausted_ticket_counter_refuses_without_leaking_capacity() {
+        let mut q = Queue::new();
+        q.next_ticket = u64::MAX;
+        assert!(q.enter(waiter(), 1).is_none());
+        assert_eq!(q.pending, 0);
+        assert!(q.waiters.is_empty());
+    }
 
     #[test]
     fn application_prefix_match_is_case_insensitive() {

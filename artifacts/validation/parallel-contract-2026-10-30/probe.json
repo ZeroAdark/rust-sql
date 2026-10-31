@@ -1,0 +1,533 @@
+{
+  "passed": true,
+  "engines": {
+    "native": {
+      "version": "PostgreSQL 18.6 on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+      "cluster": "/home/rustsql/conformance/compat-md891f7w",
+      "binary_sha256": "07b16e1aa4f0e2206c37b339b6e4cc813aa8ab9e3c5516334f753b3d90d0c536",
+      "source_sha256": "6d8598c9140470181dbf79b07b1258b1c17a4f4b58531b5141f1a469f27fafac",
+      "data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+      "setup_lf_sha256": "1c5e005b488f306c41a349a55c768fe22a2882f0955ae8ae46d26d5baadcf7c3",
+      "checks": [
+        {
+          "name": "pinned_input",
+          "sql": "SELECT unique1,hundred,stringu1 FROM tenk1 ORDER BY unique1",
+          "types": [
+            23,
+            23,
+            19
+          ],
+          "rows": 10000,
+          "values_sha256": "abaecb8848cc320732510f3fa3f31a94dea2a2065bb1fd66aacfbc7f47d398c0"
+        },
+        {
+          "name": "rescanned_sort_values",
+          "sql": "select * from (select ten from tenk1 where ten < 100 order by ten) ss right join (values (1),(2),(3)) v(x) on true",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 30000,
+          "values_sha256": "a3b84d9af2879ba070432fa1a387b2b536d7dc3845ec0efba91852d360084e7b"
+        },
+        {
+          "name": "rescanned_sort_counters",
+          "root_actual_rows": 30000.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Gather Merge",
+            "Nested Loop",
+            "Seq Scan",
+            "Sort",
+            "Values Scan"
+          ],
+          "workers_launched": 4,
+          "uncounted_nodes": []
+        },
+        {
+          "name": "function_role_0",
+          "sql": "SELECT set_and_report_role()",
+          "types": [
+            25
+          ],
+          "rows": 1,
+          "values_sha256": "5ceaa7fe6651e0935e5fc8fbd3cc0cf71e3e9f02d2a27c83203413225bb35f8e"
+        },
+        {
+          "name": "caller_role_after_success_0",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_0_simple",
+          "protocol": "simple",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": null,
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_0_simple",
+          "protocol": "simple",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_0_simple",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_0_extended",
+          "protocol": "extended",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": null,
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_0_extended",
+          "protocol": "extended",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_0_extended",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "function_role_1",
+          "sql": "SELECT set_and_report_role()",
+          "types": [
+            25
+          ],
+          "rows": 1,
+          "values_sha256": "5ceaa7fe6651e0935e5fc8fbd3cc0cf71e3e9f02d2a27c83203413225bb35f8e"
+        },
+        {
+          "name": "caller_role_after_success_1",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_1_simple",
+          "protocol": "simple",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": "parallel worker",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_1_simple",
+          "protocol": "simple",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1\nparallel worker",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_1_simple",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_1_extended",
+          "protocol": "extended",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": "parallel worker",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_1_extended",
+          "protocol": "extended",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1\nparallel worker",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_1_extended",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "savepoint_failure",
+          "protocol": "extended",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1\nparallel worker",
+          "transaction_status": "INERROR"
+        },
+        {
+          "name": "aborted_transaction",
+          "protocol": "simple",
+          "sql_sha256": "e004ebd5b5532a4b85984a62f8ad48a81aa3460c1ca07701f386135d72cdecf5",
+          "sqlstate": "25P02",
+          "message_bytes": 79,
+          "message_sha256": "3251e1dc3110bff43e262721dabb81a3591ba881be45be8625ecc3fe00a5fcc7",
+          "context": null,
+          "transaction_status": "INERROR"
+        },
+        {
+          "name": "caller_role_after_savepoint",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "worker_statistics",
+          "before": [
+            0,
+            0
+          ],
+          "after": [
+            34,
+            34
+          ],
+          "delta": [
+            34,
+            34
+          ],
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            true,
+            true
+          ]
+        }
+      ]
+    },
+    "candidate": {
+      "version": "PostgreSQL 18.6 (pgrust 0.4-beta, build 0447a2b) on x86_64-unknown-linux-gnu, 64-bit",
+      "cluster": "/home/rustsql/conformance/compat-bqe07u53",
+      "binary_sha256": "a5a76016a579d93da8e6cb73c95a419b7130ceba91c140bde6cdb017e2b0717b",
+      "source_sha256": "6d8598c9140470181dbf79b07b1258b1c17a4f4b58531b5141f1a469f27fafac",
+      "data_lf_sha256": "d62f34bdc0a25a5ba36f2dbe62a35479d9e51a7326d482e418091ea2ed40e484",
+      "setup_lf_sha256": "1c5e005b488f306c41a349a55c768fe22a2882f0955ae8ae46d26d5baadcf7c3",
+      "checks": [
+        {
+          "name": "pinned_input",
+          "sql": "SELECT unique1,hundred,stringu1 FROM tenk1 ORDER BY unique1",
+          "types": [
+            23,
+            23,
+            19
+          ],
+          "rows": 10000,
+          "values_sha256": "abaecb8848cc320732510f3fa3f31a94dea2a2065bb1fd66aacfbc7f47d398c0"
+        },
+        {
+          "name": "rescanned_sort_values",
+          "sql": "select * from (select ten from tenk1 where ten < 100 order by ten) ss right join (values (1),(2),(3)) v(x) on true",
+          "types": [
+            23,
+            23
+          ],
+          "rows": 30000,
+          "values_sha256": "a3b84d9af2879ba070432fa1a387b2b536d7dc3845ec0efba91852d360084e7b"
+        },
+        {
+          "name": "rescanned_sort_counters",
+          "root_actual_rows": 30000.0,
+          "root_actual_loops": 1,
+          "plan_nodes": [
+            "Nested Loop",
+            "Seq Scan",
+            "Sort",
+            "Values Scan"
+          ],
+          "workers_launched": 0,
+          "uncounted_nodes": [
+            "Sort"
+          ]
+        },
+        {
+          "name": "function_role_0",
+          "sql": "SELECT set_and_report_role()",
+          "types": [
+            25
+          ],
+          "rows": 1,
+          "values_sha256": "5ceaa7fe6651e0935e5fc8fbd3cc0cf71e3e9f02d2a27c83203413225bb35f8e"
+        },
+        {
+          "name": "caller_role_after_success_0",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_0_simple",
+          "protocol": "simple",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": null,
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_0_simple",
+          "protocol": "simple",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_0_simple",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_0_extended",
+          "protocol": "extended",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": null,
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_0_extended",
+          "protocol": "extended",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_0_extended",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "function_role_1",
+          "sql": "SELECT set_and_report_role()",
+          "types": [
+            25
+          ],
+          "rows": 1,
+          "values_sha256": "5ceaa7fe6651e0935e5fc8fbd3cc0cf71e3e9f02d2a27c83203413225bb35f8e"
+        },
+        {
+          "name": "caller_role_after_success_1",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_1_simple",
+          "protocol": "simple",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": null,
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_1_simple",
+          "protocol": "simple",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_1_simple",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "large_error_1_extended",
+          "protocol": "extended",
+          "sql_sha256": "c13e0cd1fa2c5f1ef051336e92140f16492886871f18f3b7907f2f39d10a62c2",
+          "sqlstate": "22P02",
+          "message_bytes": 20048,
+          "message_sha256": "c7fd2afce8fa3b08b396bd1faaae6969288b940280c65b05b9505c6a63a51dc5",
+          "context": null,
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "function_error_1_extended",
+          "protocol": "extended",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1",
+          "transaction_status": "IDLE"
+        },
+        {
+          "name": "caller_role_after_failure_1_extended",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "savepoint_failure",
+          "protocol": "extended",
+          "sql_sha256": "4f5c941257fc4e777948462397da3658017884c6878eb38cae956c1f13a845f9",
+          "sqlstate": "22012",
+          "message_bytes": 16,
+          "message_sha256": "2bc12460049627fb67d449ce2b2498de0af3468b901364ebe6bc03bfd6dc5656",
+          "context": "SQL function \"set_role_and_error\" statement 1",
+          "transaction_status": "INERROR"
+        },
+        {
+          "name": "aborted_transaction",
+          "protocol": "simple",
+          "sql_sha256": "e004ebd5b5532a4b85984a62f8ad48a81aa3460c1ca07701f386135d72cdecf5",
+          "sqlstate": "25P02",
+          "message_bytes": 79,
+          "message_sha256": "3251e1dc3110bff43e262721dabb81a3591ba881be45be8625ecc3fe00a5fcc7",
+          "context": null,
+          "transaction_status": "INERROR"
+        },
+        {
+          "name": "caller_role_after_savepoint",
+          "sql": "SELECT current_user,current_setting('role'),session_user",
+          "types": [
+            19,
+            25,
+            19
+          ],
+          "rows": 1,
+          "values_sha256": "6259ac28244fc81cabb909546c75118587eae7709219f46ccd21afee74208738"
+        },
+        {
+          "name": "worker_statistics",
+          "before": [
+            0,
+            0
+          ],
+          "after": [
+            0,
+            0
+          ],
+          "delta": [
+            0,
+            0
+          ],
+          "types": [
+            16,
+            16
+          ],
+          "values": [
+            false,
+            false
+          ]
+        }
+      ]
+    }
+  },
+  "full_report_archive_member": "probe/report.json"
+}

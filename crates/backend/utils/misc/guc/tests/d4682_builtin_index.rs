@@ -22,6 +22,7 @@ fn setup_seams() {
 fn a_registry_on_the_shared_builtin_index_finds_every_name_where_its_own_would() {
     setup_seams();
     // the reference: sharing off, the registry indexes every name itself
+    guc::store::set_share_builtin_index(false);
     guc::store::initialize_guc_options().unwrap();
     let reference: Vec<(String, usize)> =
         guc::store::with_store(|r| (0..r.len()).map(|i| (r[i].name().to_string(), i)).collect()).unwrap();
