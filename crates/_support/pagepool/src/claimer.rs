@@ -53,7 +53,7 @@ pub(crate) fn room() -> usize {
 /// A superpage of room taken: the word it came from (its sample's generation), None when there is none to take.
 fn take_room() -> Option<u64> {
     // D4872: nothing while the host is pressed (the page cache pays for a prefault)
-    if crate::purger::landing_any() || crate::warmres::shed_pending() || crate::purger::host_pressed() {
+    if crate::purger::landing_any() || crate::warmres::shed_pending() || crate::purger::host_pressed() || crate::purger::prefault_held() {
         return None;
     }
     ROOM.fetch_update(Relaxed, Relaxed, |w| match w & NO_GATE {

@@ -1,0 +1,44 @@
+{
+  "passed": true,
+  "commands": [
+    {
+      "command": [
+        "C:\\Users\\DarkMoon\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe",
+        "C:\\Users\\DarkMoon\\Desktop\\Rust SQL\\pgrust\\artifacts\\validation\\sort-pressure-2026-10-31\\replay.py"
+      ],
+      "exit": 0,
+      "stdout": "{\"passed\": true, \"recorded_evidence_only\": true, \"trials\": 33, \"passed_trials\": 30, \"successful_sorts\": 380, \"canceled_sorts\": 3, \"candidate_passes\": 6, \"harness_setup_failures\": 1, \"probe_versions\": 3, \"performance_trials\": 25, \"timed_sql_statements\": 1761300, \"candidate_retained\": false, \"standalone_smoke_trials\": 2, \"negative_controls_rejected\": [\"row_count\", \"binary\", \"affinity\"]}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "wsl",
+        "-d",
+        "Ubuntu-24.04",
+        "-u",
+        "rustsql",
+        "--",
+        "/usr/bin/python3",
+        "/mnt/c/Users/DarkMoon/Desktop/Rust SQL/pgrust/artifacts/validation/sort-pressure-2026-10-31/replay.py"
+      ],
+      "exit": 0,
+      "stdout": "{\"passed\": true, \"recorded_evidence_only\": true, \"trials\": 33, \"passed_trials\": 30, \"successful_sorts\": 380, \"canceled_sorts\": 3, \"candidate_passes\": 6, \"harness_setup_failures\": 1, \"probe_versions\": 3, \"performance_trials\": 25, \"timed_sql_statements\": 1761300, \"candidate_retained\": false, \"standalone_smoke_trials\": 2, \"negative_controls_rejected\": [\"row_count\", \"binary\", \"affinity\"]}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "C:\\Users\\DarkMoon\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\python\\python.exe",
+        "-O",
+        "C:\\Users\\DarkMoon\\Desktop\\Rust SQL\\pgrust\\artifacts\\validation\\sort-pressure-2026-10-31\\replay.py"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "Traceback (most recent call last):\n  File \"C:\\Users\\DarkMoon\\Desktop\\Rust SQL\\pgrust\\artifacts\\validation\\sort-pressure-2026-10-31\\replay.py\", line 10, in <module>\n    raise RuntimeError('Evidence verification requires enabled assertions')\nRuntimeError: Evidence verification requires enabled assertions\n"
+    }
+  ],
+  "verifier_sha256": {
+    "replay.py": "89f41a2bbf5c25285fe4753b7a130f62cadc56576de538af4003bfa1dcc3360e",
+    "medium_checks.py": "77da224ec39fa60adeb38c12a1fc0a491d2d3c442a8d4c93257b78df9c10c2f2",
+    "capacity_checks.py": "365012ee461de43f00ad926f08856278f1ee232fbac6cafe587549726aea46a4"
+  }
+}

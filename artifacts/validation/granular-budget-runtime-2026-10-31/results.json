@@ -1,0 +1,19 @@
+{
+  "candidate_sha256": "635ec740b3cd85c4318eadc87843705032494a49d92d1deeb79b09a8c5ab9e57",
+  "reviewed_sql_cases": 231,
+  "raw_postgresql_passes": 203,
+  "raw_postgresql_differences": 28,
+  "isolation_cases": 510,
+  "smoke_checks": 12,
+  "probes": {
+    "idle-contract": 12,
+    "connection-contract": 12,
+    "admission": 52,
+    "compatibility": 87,
+    "recovery": 12,
+    "auth-tls": 21
+  },
+  "window_checks_per_engine": 220,
+  "bind_lifecycle_groups_per_engine": 8,
+  "production_qualified": false
+}

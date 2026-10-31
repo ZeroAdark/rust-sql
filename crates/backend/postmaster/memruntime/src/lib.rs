@@ -352,6 +352,11 @@ fn own_view_in(own: u64, current: u64, stat: &[u8]) -> u64 {
 /// lock skips the store, retried at the next sample; a reader that finds it busy reads the files itself).
 static LIMIT: pgsync::Mutex<Option<MemLimit>> = pgsync::Mutex::new(None);
 
+/// Preserve a known exhausted budget; the page pool's older allocation cap uses zero for unknown/unlimited.
+fn known_pool_budget(limit: u64, budget: u64) -> Option<usize> {
+    (limit != 0).then(|| budget.min((usize::MAX - 1) as u64) as usize)
+}
+
 /// -> the limit read now, and whether it was stored in `LIMIT`
 fn store_limit() -> (MemLimit, bool) {
     let l = memory_limit(guc_tables::backing::pgrust_memory_watchdog_limit());
@@ -360,6 +365,7 @@ fn store_limit() -> (MemLimit, bool) {
         mcx::governor::publish_limit(l.bytes as usize);
     }
     LIMIT_BYTES.store(l.bytes, Ordering::Relaxed);
+    pagepool::set_reclaim_budget(known_pool_budget(l.bytes, mempolicy::snapshot::b_now(l.bytes, mcx::governor::bar() as u64)));
     open_sample(&l);
     let stored = LIMIT.try_lock().map(|mut cached| *cached = Some(l.clone())).is_ok();
     (l, stored)
@@ -3023,6 +3029,15 @@ pub fn start(thread_init: impl FnOnce() + Send + 'static) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_zero_pool_budget_is_not_an_unknown_limit() {
+        assert_eq!(known_pool_budget(0, 0), None);
+        assert_eq!(known_pool_budget(0, 128 << 20), None);
+        assert_eq!(known_pool_budget(1 << 30, 0), Some(0));
+        assert_eq!(known_pool_budget(2 << 30, 896 << 20), Some(896 << 20));
+        assert_eq!(known_pool_budget(u64::MAX, u64::MAX), Some(usize::MAX - 1));
+    }
 
     /// D4872: the PSI file's `some` total (µs), as /proc/pressure/memory and a cgroup's memory.pressure write it; a file
     /// without a `some` line or a total reads None (that signal does not press).

@@ -1,0 +1,9 @@
+{
+  "decision": "rejected",
+  "promoted": false,
+  "pressure_passed": true,
+  "cpu_and_latency_guards_passed": true,
+  "reason": "Both medium and longer capacity trials use more charged memory and process PSS than the accepted build.",
+  "accepted_binary": "0be60915b40c9f70f39dcb3a0fd1f8918608a20095f767ec081a5b5320caa277",
+  "rejected_binary": "4d0518fe5c82fead8641d71df6b16a7aba27664d13b6b2d125c657fe2b508482"
+}

@@ -1,0 +1,29 @@
+{
+  "decision": "locally-retained",
+  "candidate_sha256": "635ec740b3cd85c4318eadc87843705032494a49d92d1deeb79b09a8c5ab9e57",
+  "baseline_sha256": "0be60915b40c9f70f39dcb3a0fd1f8918608a20095f767ec081a5b5320caa277",
+  "parent_commit": "b3d1a667e200da873aa72fda7530cce5c2c9279f",
+  "production_qualified": false,
+  "github_actions_used": false,
+  "evidence": {
+    "performance": {
+      "path": "artifacts/validation/granular-budget-reclaim-2026-10-31/results.json",
+      "sha256": "63f72f710a343e5877498b2e88a6b4ebcd134d121b4456db212b7e8a09b0e68c"
+    },
+    "resources": {
+      "path": "artifacts/validation/granular-budget-resources-2026-10-31/results.json",
+      "sha256": "6e1223af25a36e46abf89fc97a50e3c897fdda6bf6a8bdb7e019c0181bf9e6be"
+    },
+    "runtime": {
+      "path": "artifacts/validation/granular-budget-runtime-2026-10-31/results.json",
+      "sha256": "bbed38f075efd32298cf9d3172795d87f5199700cf8aed129e38def419f92752"
+    }
+  },
+  "remaining": [
+    "PostgreSQL charged-memory and process-PSS parity",
+    "PostgreSQL point-read and committed-update p99 parity",
+    "long-duration soak and maintenance/compaction faults",
+    "PITR/failover/upgrade rehearsals",
+    "broader drivers, sanitizers/fuzzing and representative Linux qualification"
+  ]
+}

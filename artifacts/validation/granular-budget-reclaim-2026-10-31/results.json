@@ -1,0 +1,262 @@
+{
+  "evidence_valid": true,
+  "recorded_evidence_only": true,
+  "candidate_promoted": false,
+  "candidate_sha256": "635ec740b3cd85c4318eadc87843705032494a49d92d1deeb79b09a8c5ab9e57",
+  "phases": {
+    "medium-1g": {
+      "memory_mib": 1024,
+      "trial_count": 15,
+      "timed_statements": 51300,
+      "warmup_statements": 17100,
+      "cpu_windows": {
+        "warmup_and_measurement": {
+          "median_server_cpu_seconds": {
+            "postgresql": 46.433429,
+            "rustsql-baseline": 4.196545,
+            "rustsql": 4.186301
+          },
+          "candidate_change_percent": -0.24410556779446146
+        },
+        "setup_warmup_and_measurement": {
+          "median_server_cpu_seconds": {
+            "postgresql": 46.898556,
+            "rustsql-baseline": 4.747978,
+            "rustsql": 4.723699
+          },
+          "candidate_change_percent": -0.5113545176494094
+        },
+        "setup_through_shutdown_and_restart": {
+          "median_server_cpu_seconds": {
+            "postgresql": 47.073829,
+            "rustsql-baseline": 4.851675,
+            "rustsql": 4.809938
+          },
+          "candidate_change_percent": -0.860259601065616
+        }
+      },
+      "phase": "medium",
+      "engines": {
+        "postgresql": {
+          "cpu_ms_per_bundle": 193.56386111111112,
+          "sql_per_second": 178.9102913518334,
+          "charged_peak_mib": 223.85546875,
+          "pss_peak_mib": 93.3359375,
+          "read_p99_ms": 0.371377,
+          "update_p99_ms": 1.081548,
+          "aggregate_p99_ms": 27.752494,
+          "range_p99_ms": 10.80875,
+          "join_p99_ms": 41.785167,
+          "bundle_p99_ms": 78.928765
+        },
+        "rustsql-baseline": {
+          "cpu_ms_per_bundle": 17.679894444444447,
+          "sql_per_second": 179.4335948337439,
+          "charged_peak_mib": 403.33984375,
+          "pss_peak_mib": 412.2626953125,
+          "read_p99_ms": 0.46875,
+          "update_p99_ms": 1.173552,
+          "aggregate_p99_ms": 5.451322,
+          "range_p99_ms": 0.974979,
+          "join_p99_ms": 5.16075,
+          "bundle_p99_ms": 17.302304
+        },
+        "rustsql": {
+          "cpu_ms_per_bundle": 17.619194444444446,
+          "sql_per_second": 179.43920854845666,
+          "charged_peak_mib": 327.26171875,
+          "pss_peak_mib": 354.8271484375,
+          "read_p99_ms": 0.4512,
+          "update_p99_ms": 1.158786,
+          "aggregate_p99_ms": 3.960446,
+          "range_p99_ms": 1.010836,
+          "join_p99_ms": 5.065192,
+          "bundle_p99_ms": 16.214134
+        }
+      },
+      "candidate_change_percent": {
+        "cpu_ms_per_bundle": -0.3433278416380747,
+        "sql_per_second": 0.0031285750686560476,
+        "charged_peak_mib": -18.862040579148708,
+        "pss_peak_mib": -13.931783672898945,
+        "read_p99_ms": -3.744000000000003,
+        "update_p99_ms": -1.2582314205079825,
+        "aggregate_p99_ms": -27.34888894840555,
+        "range_p99_ms": 3.6777202380769314,
+        "join_p99_ms": -1.8516300925253248,
+        "bundle_p99_ms": -6.289162414439131
+      },
+      "preservation_failures": [],
+      "evidence_valid": true,
+      "passed": true
+    },
+    "medium": {
+      "memory_mib": 2048,
+      "trial_count": 15,
+      "timed_statements": 51300,
+      "warmup_statements": 17100,
+      "cpu_windows": {
+        "warmup_and_measurement": {
+          "median_server_cpu_seconds": {
+            "postgresql": 46.123,
+            "rustsql-baseline": 4.188196,
+            "rustsql": 4.184115
+          },
+          "candidate_change_percent": -0.09744052093071387
+        },
+        "setup_warmup_and_measurement": {
+          "median_server_cpu_seconds": {
+            "postgresql": 46.599405,
+            "rustsql-baseline": 4.746424,
+            "rustsql": 4.730598
+          },
+          "candidate_change_percent": -0.33342996748710885
+        },
+        "setup_through_shutdown_and_restart": {
+          "median_server_cpu_seconds": {
+            "postgresql": 46.771967,
+            "rustsql-baseline": 4.848965,
+            "rustsql": 4.824366
+          },
+          "candidate_change_percent": -0.5073041360372677
+        }
+      },
+      "phase": "medium",
+      "engines": {
+        "postgresql": {
+          "cpu_ms_per_bundle": 192.81107222222224,
+          "sql_per_second": 178.892432322537,
+          "charged_peak_mib": 223.765625,
+          "pss_peak_mib": 92.70703125,
+          "read_p99_ms": 0.385241,
+          "update_p99_ms": 1.087078,
+          "aggregate_p99_ms": 27.136527,
+          "range_p99_ms": 11.343518,
+          "join_p99_ms": 40.850888,
+          "bundle_p99_ms": 79.473728
+        },
+        "rustsql-baseline": {
+          "cpu_ms_per_bundle": 17.695444444444444,
+          "sql_per_second": 179.44115422085576,
+          "charged_peak_mib": 459.9453125,
+          "pss_peak_mib": 486.5439453125,
+          "read_p99_ms": 0.466589,
+          "update_p99_ms": 1.185784,
+          "aggregate_p99_ms": 3.885209,
+          "range_p99_ms": 0.994288,
+          "join_p99_ms": 5.265605,
+          "bundle_p99_ms": 16.852823
+        },
+        "rustsql": {
+          "cpu_ms_per_bundle": 17.670177777777777,
+          "sql_per_second": 179.45147846718623,
+          "charged_peak_mib": 445.94140625,
+          "pss_peak_mib": 473.5517578125,
+          "read_p99_ms": 0.480846,
+          "update_p99_ms": 1.183884,
+          "aggregate_p99_ms": 3.98288,
+          "range_p99_ms": 1.012542,
+          "join_p99_ms": 5.265005,
+          "bundle_p99_ms": 17.006855
+        }
+      },
+      "candidate_change_percent": {
+        "cpu_ms_per_bundle": -0.14278627895440987,
+        "sql_per_second": 0.005753555462395532,
+        "charged_peak_mib": -3.044689416200974,
+        "pss_peak_mib": -2.6703009307114667,
+        "read_p99_ms": 3.0555799643797954,
+        "update_p99_ms": -0.16023154301288978,
+        "aggregate_p99_ms": 2.513918813633964,
+        "range_p99_ms": 1.8358865841687777,
+        "join_p99_ms": -0.011394702033284965,
+        "bundle_p99_ms": 0.9139833723999846
+      },
+      "preservation_failures": [],
+      "evidence_valid": true,
+      "passed": true
+    },
+    "capacity": {
+      "memory_mib": 2048,
+      "trial_count": 10,
+      "timed_statements": 1710000,
+      "warmup_statements": 11400,
+      "cpu_windows": {
+        "warmup_and_measurement": {
+          "median_server_cpu_seconds": {
+            "rustsql-baseline": 139.437063,
+            "rustsql": 139.116527
+          },
+          "candidate_change_percent": -0.22987862273031734
+        },
+        "setup_warmup_and_measurement": {
+          "median_server_cpu_seconds": {
+            "rustsql-baseline": 140.068064,
+            "rustsql": 139.828954
+          },
+          "candidate_change_percent": -0.1707098628849324
+        },
+        "setup_through_shutdown_and_restart": {
+          "median_server_cpu_seconds": {
+            "rustsql-baseline": 140.240147,
+            "rustsql": 140.004859
+          },
+          "candidate_change_percent": -0.16777506657918995
+        }
+      },
+      "phase": "capacity",
+      "engines": {
+        "rustsql-baseline": {
+          "cpu_ms_per_bundle": 15.369214,
+          "sql_per_second": 4413.537485426328,
+          "charged_peak_mib": 458.83203125,
+          "pss_peak_mib": 485.6640625,
+          "read_p99_ms": 4.214095,
+          "update_p99_ms": 6.97404,
+          "aggregate_p99_ms": 11.511932,
+          "range_p99_ms": 5.466547,
+          "join_p99_ms": 14.670673,
+          "bundle_p99_ms": 38.372888
+        },
+        "rustsql": {
+          "cpu_ms_per_bundle": 15.342941111111111,
+          "sql_per_second": 4423.065657923644,
+          "charged_peak_mib": 435.80078125,
+          "pss_peak_mib": 463.1318359375,
+          "read_p99_ms": 4.216923,
+          "update_p99_ms": 6.917209,
+          "aggregate_p99_ms": 11.463775,
+          "range_p99_ms": 5.394072,
+          "join_p99_ms": 14.676337,
+          "bundle_p99_ms": 38.431438
+        }
+      },
+      "candidate_change_percent": {
+        "cpu_ms_per_bundle": -0.17094490901674586,
+        "sql_per_second": 0.2158851607985124,
+        "charged_peak_mib": -5.019538399979573,
+        "pss_peak_mib": -4.639467546046816,
+        "read_p99_ms": 0.06710812167263214,
+        "update_p99_ms": -0.814893519394777,
+        "aggregate_p99_ms": -0.41832248487916335,
+        "range_p99_ms": -1.3257912170150488,
+        "join_p99_ms": 0.03860763579148774,
+        "bundle_p99_ms": 0.15258168736216327
+      },
+      "preservation_failures": [],
+      "evidence_valid": true,
+      "passed": true
+    }
+  },
+  "complete": true,
+  "completed_phases_passed": true,
+  "preservation_passed": true,
+  "timed_statements": 1812600,
+  "warmup_statements": 45600,
+  "tamper_controls_rejected": [
+    "binary",
+    "cpu_binding",
+    "row_count",
+    "restart"
+  ]
+}

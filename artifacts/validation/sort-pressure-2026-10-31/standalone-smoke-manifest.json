@@ -1,0 +1,25 @@
+{
+  "archive_sha256": "b7459e02df3219f64eaaa98be6019a5f30d73768dc966eb03e0a89dfdfa194eb",
+  "members": {
+    "standalone-sort-smoke-20261031-postgresql-command.json": "e536cd87dbd60e769ae693a0c1caa6b4ea3f47de811ed6d1198aa94e42dc6ff2",
+    "standalone-sort-smoke-20261031-postgresql.json": "3ac1d4150d7277c1f3ffc2748c9ca506b31014900e54de2825b784863cbffb1d",
+    "standalone-sort-smoke-20261031-postgresql.log": "3a7755e7b597cac9cd4e927ef7609eaf5ecd510e6835f6f5484627862d3c2655",
+    "standalone-sort-smoke-20261031-rustsql-command.json": "dad8e9c4c92e18049b14b0efecf4f3b04aeb52d741b11d103ce62e189d17cfc7",
+    "standalone-sort-smoke-20261031-rustsql.json": "37229f4e16d760e91823708c1ce4a3f9b30ecb6e89016fce772543aaed142508",
+    "standalone-sort-smoke-20261031-rustsql.log": "42ae0ea1a46d1341f89683282aee5fbf56b3d9bcb3327bc191c983153511d3c1",
+    "standalone-sort-smoke-20261031-source/cluster.py": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2",
+    "standalone-sort-smoke-20261031-source/connection_churn_probe.py": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a",
+    "standalone-sort-smoke-20261031-source/connection_queue_probe.py": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294",
+    "standalone-sort-smoke-20261031-source/resource_scope.py": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e",
+    "standalone-sort-smoke-20261031-source/spill_probe.py": "08daf4043ab600d1c60ce8d3e4788674e4d1ca7467b2a354292724b26a9f2616",
+    "standalone-sort-smoke-20261031-source/sustained_sort_probe.py": "6c93468891cd342605153c84a3a134e4400182d91fe2b19adb3052ecc86b24c9",
+    "standalone-sort-smoke-20261031-summary.json": "e51141241bba64bbfda5992a96a26a5f90c96328f637a717623623fb2aaf3c70",
+    "standalone-sort-smoke-20261031-postgresql-cluster/initdb.log": "1b8eaa9f0a456d1093417ecd147b01d6fce4bc35c4820e8d9ca375de65467105",
+    "standalone-sort-smoke-20261031-postgresql-cluster/server.log": "b1164861221eed6a51d85d7ff367d1f433dbf643a4af1cfd7b4321ffc7102e38",
+    "standalone-sort-smoke-20261031-rustsql-cluster/initdb.log": "7c0e308333031f8f6e2c27f80ec5094830a0d9a311796756bf95fa07b5b12f5d",
+    "standalone-sort-smoke-20261031-rustsql-cluster/server.log": "3400f549d44f34abaa07d1dd7b85314275d99f0b59e4cda440b152aa76653240"
+  },
+  "completed_trials": 2,
+  "main_sorts": 4,
+  "full_restart_sorts": 2
+}
