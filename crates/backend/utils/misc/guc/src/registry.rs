@@ -135,9 +135,14 @@ impl GucRegistry {
 
     /// D4682 step 2 (a): this registry, still empty, takes `builtins` as its built-in variables' names instead of
     /// building its own (its built-in definitions go through `define_builtin`, then `settle_builtin_index`).
-    pub fn adopt_builtin_index(&mut self, builtins: std::sync::Arc<BuiltinIndex>) {
+    pub fn adopt_builtin_index(&mut self, builtins: std::sync::Arc<BuiltinIndex>) -> PgResult<()> {
         debug_assert!(self.vars.is_empty() && self.index.is_empty(), "a registry adopts the built-in index before any define");
+        // The shared index knows the initial slot count. Reserve once instead of copying the growing value array
+        // and its non-default links through successive allocations for every session. Custom settings can still grow.
+        self.vars.try_reserve_exact(builtins.len()).map_err(|_| oom())?;
+        self.nondef.try_grow(builtins.len()).map_err(|_| oom())?;
         self.builtins = Some(builtins);
+        Ok(())
     }
 
     /// The built-in loop's define: with an adopted index the variable's slot is the one the index names (checked in debug

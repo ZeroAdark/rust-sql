@@ -1,0 +1,11 @@
+# Configuration registry allocation: runtime evidence
+
+Candidate `0be60915` reserves the known built-in registry slots and non-default links once per session. ASCII name folding now allocates its final byte length directly, preserving every non-ASCII byte. The source is `a91114d` plus the four files recorded in `build/report.json`; the preceding accepted executable is `57baa2ef`.
+
+All 103 GUC tests pass. Removing reservation reproduces 21 array reallocations; restoring the old name-folding implementation reproduces temporary-string growth. Both negative controls fail at the intended assertions. The original unsuccessful prototype/test is preserved separately. Built-in installation performs zero reallocations in the focused test; session values, hooks, custom-setting lookup and placeholder reuse remain private and correct. Name lookup remains expected O(1) in the number of settings. Initialization remains O(number of settings), and name folding O(name length).
+
+The exact release binary passes 231/231 reviewed SQL cases and 510 isolation cases. Raw PostgreSQL output remains 203 passes and 28 documented differences under the unchanged compatibility policy. Fresh probes pass 12 smoke, 12 idle, 12 connection, 52 admission, 87 differential, 21 authentication/TLS, ten whole-process crash cycles plus logical restore, and 220 window-oracle checks per corrected engine. The window reference is separately patched PostgreSQL; performance uses native PostgreSQL 18.6.
+
+The archive binds transcripts, source, policies and binary hashes. The prior native SQL control is reused with its transcripts preserved. Ephemeral TLS keys, credentials and database files are excluded. Run `python3 replay.py` to verify recorded evidence without extracting or executing archived contents; it does not rerun SQL. Altered SQL output and optimized Python are rejected.
+
+The [performance evidence](../guc-registry-reserve-performance-2026-10-31/README.md) preserves the initial short capacity latency miss and the longer follow-up, as well as connection comparisons and three 2 GiB startup checks. This is a scoped local retention decision, not a production release. Memory/read/update parity with PostgreSQL and the remaining operational gates stay open. GitHub Actions remained disabled.

@@ -220,7 +220,7 @@ fn initialize_guc_options_impl(publish: impl Fn(&str) -> bool) -> PgResult<()> {
     let share = SHARE_BUILTIN_INDEX.load(std::sync::atomic::Ordering::Relaxed);
     let mut reg = GucRegistry::new();
     if let Some(builtins) = BUILTIN_INDEX.get().filter(|_| share) {
-        reg.adopt_builtin_index(std::sync::Arc::clone(builtins));
+        reg.adopt_builtin_index(std::sync::Arc::clone(builtins))?;
     }
     for setting in all_settings() {
         let Some(mut var) = build_variable(setting) else {
