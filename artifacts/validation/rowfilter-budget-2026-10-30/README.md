@@ -1,0 +1,9 @@
+# Deterministic Bloom-filter budget checks
+
+The [3594c736 CI server job](https://github.com/ZeroAdark/rust-sql/actions/runs/41143939482/job/124364487458) stopped at a unit test: the sequential-key false-positive rate was 0.067485 against a 0.04 bound. Later SQL comparison steps were skipped; the final audit consequently lacked its required inputs. This is not evidence of a new SQL-result mismatch.
+
+The test selected its filter size from the runner's L2 cache but assumed 8–16 bits per key. The supported cache cap can select a smaller filter. An explicit 16,384-word budget for 200,000 keys (5.24288 bits per key) reproduces the reported rate exactly. The original runner's L2 reading was not captured, so the match identifies a reproducible sizing explanation, not a directly observed cache value.
+
+The revised test uses explicit budgets: the original 4% bound at 10.48576 bits per key, a 10% bound at 5.24288 bits per key, and a 25% bound at the supported four-bit floor. Each budget checks sequential, strided and scattered keys, no false negatives for all build keys, and 400,000 outside probes per key shape. The separate host-budget test still verifies the live L2 cap. Runtime sizing, hashing and adaptive rejection are unchanged; the entire source prefix before the test module is byte-identical to the parent.
+
+All **642 lowerv4 unit tests pass** locally on Linux x86-64 under WSL2. [Results](results.json) record the parent/source hashes, command, deterministic diagnostic rates and log hashes. [The compressed full test log](full-unit.log.gz) retains warnings and individual test results. The diagnostic rate reproduction is not an independent correctness oracle. A subsequent GitHub run must qualify the published commit; these tests establish no new performance gain or production qualification.
