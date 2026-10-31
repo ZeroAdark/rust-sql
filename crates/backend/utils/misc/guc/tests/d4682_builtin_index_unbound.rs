@@ -77,6 +77,7 @@ fn session(procno: u32) -> (i64, i64) {
 fn the_shared_builtin_index_is_built_once_on_unbound_and_never_on_a_session() {
     setup_seams();
     set_home(true);
+    guc::store::set_share_builtin_index(false);
     // sharing off first: whatever the first registry build in the process sets up for good lands on the first session,
     // and the second is the plain session the shared ones are compared with
     let _ = session(4039);

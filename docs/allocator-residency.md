@@ -62,3 +62,9 @@ alternating repetitions per engine. CPU per bundle changes +0.33%; the roughly
 campaign is excluded from performance acceptance because one PostgreSQL trial
 recorded timed CPU throttling. Its correctness and restart checks still pass,
 and all observations remain in the replayable evidence.
+
+The retained binary also passes a [fresh compatibility and recovery qualification](../artifacts/validation/residency-runtime-2026-10-31/README.md):
+231 reviewed SQL cases, 510 isolation cases, the differential, admission, connection,
+idle-session and TLS probes, ten crash cycles with logical restore, and the independent
+window oracle. Raw PostgreSQL expectations remain separate (203 passes, 28 documented
+differences). These results bind to `02cfbca6`; they do not qualify later prototypes.

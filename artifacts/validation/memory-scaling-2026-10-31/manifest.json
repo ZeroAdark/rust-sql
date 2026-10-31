@@ -1,0 +1,1898 @@
+{
+  "archive_sha256": "422637888c10cc78a4f336b2c5de360f7bace70c4de0901e2cf5dc1e78c780fa",
+  "archive_bytes": 2888982,
+  "members": {
+    "analysis/analysis.json": {
+      "bytes": 450562,
+      "sha256": "137f6554084921aee280004b7ff8f7aadb9215bbbd20c750dc229b82975565bb"
+    },
+    "analysis/analyze_memory_scaling.py": {
+      "bytes": 27896,
+      "sha256": "7d7358b5c40b6d926dd1d915f07c9aed91fe2309a12ad8d135725c90572d2e63"
+    },
+    "analysis/memory-scaling.png": {
+      "bytes": 322484,
+      "sha256": "a873cc21da0ee87c0987e370ef56c25509275d78fe58261cf3f795d3013d7e6d"
+    },
+    "analysis/memory-scaling.svg": {
+      "bytes": 229379,
+      "sha256": "b8e11a9629742d1e8f5097aeb686ce03efce74f6929449cc8cb907ce95f0693d"
+    },
+    "analysis/report.md": {
+      "bytes": 12939,
+      "sha256": "78a5b0013a0840f6d0d6fcea89adc66fb60c21cfa5896a831ff1aaae87b488a4"
+    },
+    "campaigns/connections/1/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "f7f3df9cf10bb1b8acb033ddea164f77e5fe13827f19b48102bf5cf77d173eaa"
+    },
+    "campaigns/connections/1/postgresql-1-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "fcd306c9e777f946a0c2eac302faf9fe7a32ee55044b1f1b1d8e4a58a9bf90a8"
+    },
+    "campaigns/connections/1/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "f92fd750c3b9d184eedf3121f99dc4bdbb401cb8c4a0b4da43efa19955144472"
+    },
+    "campaigns/connections/1/postgresql-2-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "dea8caa39ae9f45f911b95dc4a88f18285a62fa196fbb951790ce0336e31a6e6"
+    },
+    "campaigns/connections/1/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "6612166db9e8381eb670a341c9046843f3758cb9877e88efb70e58952001f823"
+    },
+    "campaigns/connections/1/postgresql-3-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "a57f5dbaeeb9e5183bc2f1fb4c2df392a7c3bd4f7e82f43e1db8d1395b7d3fba"
+    },
+    "campaigns/connections/1/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "ce58fe888a93d0ae870e1450374b9826c3d2ffff339c8fc8ab563145dc31c43f"
+    },
+    "campaigns/connections/1/rustsql-1-logs/server.log": {
+      "bytes": 7204,
+      "sha256": "c0aee78150a8540554fc29d7beebff7a95f7102f7f7ea50758864ddb82144090"
+    },
+    "campaigns/connections/1/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "a16d50601050e6a1d68907c744b0132adaaf69caa6541f48283a7882c0c4d54b"
+    },
+    "campaigns/connections/1/rustsql-2-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "5d8f9b3540ef895514da64a03e578f4137b395f52356e935736fdae00167c145"
+    },
+    "campaigns/connections/1/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "175244025a5bee7a913a14ba16c8cf36ce711c314a1d5892d814e9a8f1cc1aa5"
+    },
+    "campaigns/connections/1/rustsql-3-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "59965a568f6e08eb143025457c527c6dc9b0f48915e0a7fe93362e09e1afd183"
+    },
+    "campaigns/connections/1/scaling-postgresql-1.json": {
+      "bytes": 41124,
+      "sha256": "673466f72dac10af1df30d923aaa6831c9f1eedb8e4ee9cb286e1e1610805a4a"
+    },
+    "campaigns/connections/1/scaling-postgresql-2.json": {
+      "bytes": 41191,
+      "sha256": "9f01239c4d3d27489232d2b10b8f21785cd10c258d2c2863be85a2c231945e3a"
+    },
+    "campaigns/connections/1/scaling-postgresql-3.json": {
+      "bytes": 41206,
+      "sha256": "a781086c2582cce6d03704cc5cfca610874f25d2a02d5f3187d6aab372445ad7"
+    },
+    "campaigns/connections/1/scaling-rustsql-1.json": {
+      "bytes": 37044,
+      "sha256": "96bbd1707ef3d7deb09979c967caf2fbff3f4f8f6223ab244dbf8eb38aee13f2"
+    },
+    "campaigns/connections/1/scaling-rustsql-2.json": {
+      "bytes": 37096,
+      "sha256": "3a4a26808e8db2e88a093fd1899de452a5a0124bb76c053c01e004a1c57765a8"
+    },
+    "campaigns/connections/1/scaling-rustsql-3.json": {
+      "bytes": 37102,
+      "sha256": "f7deadeeb1bbe02faee533a8d9d60a002dd65839ad27c78b0048c467266d7d16"
+    },
+    "campaigns/connections/12/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "253d544b85cf3d0acd782485daa247be2e7569631a87ad70ea3a950dac972cb8"
+    },
+    "campaigns/connections/12/postgresql-1-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "a60d922a5395a4f532362e74a2cb8f81584b3d028dcf50685b6fb0c19b81b7a8"
+    },
+    "campaigns/connections/12/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "dcf91f391b58207cb6926cb1b08f7f5299407190c0e583eb514ecd5df6dec1de"
+    },
+    "campaigns/connections/12/postgresql-2-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "1839f3bbbcefec7cd9794fa75e85d1ca231919c5895c9b6402437e835ff4683d"
+    },
+    "campaigns/connections/12/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "fa2180dc1d5f15ce584b57a8ece6287b2cc67e1fbe4f7b83a297a27812f1aad8"
+    },
+    "campaigns/connections/12/postgresql-3-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "abba70309e5b70821d5cc3020f58159fbe3c33fe0272ac26672ef17ab21b1931"
+    },
+    "campaigns/connections/12/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "e23a72b3bfdcf9d7d49131760c8ba204d99d43f4e1fbaadaf34c9d87034ee817"
+    },
+    "campaigns/connections/12/rustsql-1-logs/server.log": {
+      "bytes": 7205,
+      "sha256": "94cdccdc4d6a40bc185fa719b56b703e196173d32f54b4b833bb0b32091bcd23"
+    },
+    "campaigns/connections/12/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "61709a9463ba1264361a3b724f0907342529976cbb15ca98263940f689b8a301"
+    },
+    "campaigns/connections/12/rustsql-2-logs/server.log": {
+      "bytes": 7205,
+      "sha256": "28a30e1d9e3c1fbc371a3677d8eea06bec169d7b96b783a8e0bc7f1d92c231dc"
+    },
+    "campaigns/connections/12/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "f1d772746c01e9e1d131377d62bab6177a6c67dd7a65366ec7aa670e78ac75df"
+    },
+    "campaigns/connections/12/rustsql-3-logs/server.log": {
+      "bytes": 7205,
+      "sha256": "06f9f0e0ff60e2993e525de92bc2d5cf0370a96a65a2171c17d4f6d92ccff474"
+    },
+    "campaigns/connections/12/scaling-postgresql-1.json": {
+      "bytes": 46190,
+      "sha256": "ac3c120f761640cba8ec0915c2cdb713d3fa61426274568d2794ed86200d56b5"
+    },
+    "campaigns/connections/12/scaling-postgresql-2.json": {
+      "bytes": 46239,
+      "sha256": "0b45f5de51dddedb61b8cfeffe717d083d8d89f5cc39b50513182c1f06c96fa6"
+    },
+    "campaigns/connections/12/scaling-postgresql-3.json": {
+      "bytes": 46235,
+      "sha256": "0407b246cc102ab916dacb27bd19162e7eab53ec06bb075bb76880ac9dee1a11"
+    },
+    "campaigns/connections/12/scaling-rustsql-1.json": {
+      "bytes": 42058,
+      "sha256": "dd312473ec626d80cd081ebde8bf2f86e9ba82697590988346a27be159a7b5a0"
+    },
+    "campaigns/connections/12/scaling-rustsql-2.json": {
+      "bytes": 42106,
+      "sha256": "881f3227a5d652d45e07607fa682b755c35853ad561f5ff8fd74a84172e30dba"
+    },
+    "campaigns/connections/12/scaling-rustsql-3.json": {
+      "bytes": 42096,
+      "sha256": "f668afa31212a88b66f4f6243e68e2f0bbe0c65b98c7fb55ac0fa9ab140b5683"
+    },
+    "campaigns/connections/192/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "2147a9e9f30275416875967e5ba452a840089a4f1e3b04beda367115f730acd7"
+    },
+    "campaigns/connections/192/postgresql-1-logs/server.log": {
+      "bytes": 3026,
+      "sha256": "8ea5fc26dce3fd9eb91029d90413c0f899e99a56363ac3e2a97d62bd05d95e31"
+    },
+    "campaigns/connections/192/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "9b6c57902bdb6ae01fbec630b97fb794cdc8eabe3acdd65a3b4853b90b612f38"
+    },
+    "campaigns/connections/192/postgresql-2-logs/server.log": {
+      "bytes": 3026,
+      "sha256": "48936c663d0d5cdfc9c6d01e2cc56ed62233bf04ecfcf82f23e1c2f5b67d15d2"
+    },
+    "campaigns/connections/192/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "ef6a98793114412d58cba8b15a047990a44766f7a647cb8d8bbd3dd433064251"
+    },
+    "campaigns/connections/192/postgresql-3-logs/server.log": {
+      "bytes": 3026,
+      "sha256": "039272b656c0d9a8dbbab28f850c1b5b23eec1d29d864cc2e3b163a91ec58af0"
+    },
+    "campaigns/connections/192/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "62fa741320b663fa47ce1221ef86c755f5c38f98cdeb593af39a73d2602ae311"
+    },
+    "campaigns/connections/192/rustsql-1-logs/server.log": {
+      "bytes": 1990702,
+      "sha256": "9f3e3746733362d5ef94798ecf2f77a96d88634d6733466d3510cd3910d2623e"
+    },
+    "campaigns/connections/192/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "2c1b4df2c96c7b14cee5ab36fdaa7ed0fb2d7c7b5914a51f11702d31df95e17c"
+    },
+    "campaigns/connections/192/rustsql-2-logs/server.log": {
+      "bytes": 1984968,
+      "sha256": "c1a31393d61795b43eda20ac143610e59a7ea1aa08d4510bf5ae2f46afd75cdb"
+    },
+    "campaigns/connections/192/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "fbc40b8135d0cdd54079229e90f67186c71e6e0096a909fbbeebc5b966117b46"
+    },
+    "campaigns/connections/192/rustsql-3-logs/server.log": {
+      "bytes": 1985412,
+      "sha256": "cd808ad941afda390f0819c3dbb970d722748df706d4d60bab5d19f088466486"
+    },
+    "campaigns/connections/192/scaling-postgresql-1.json": {
+      "bytes": 127594,
+      "sha256": "9235b7b1b9f6ed8aa886ecca1ce67a868004f25a573a38708d31e5d01c083fa1"
+    },
+    "campaigns/connections/192/scaling-postgresql-2.json": {
+      "bytes": 127616,
+      "sha256": "2c9ff299dd31e3f215e1cf81abd0193ec0ff355e515299475fc08742514c55c2"
+    },
+    "campaigns/connections/192/scaling-postgresql-3.json": {
+      "bytes": 127625,
+      "sha256": "c6afc612db077fa707bce3639189b20a43120a74ed9f29171932152dca6fba65"
+    },
+    "campaigns/connections/192/scaling-rustsql-1.json": {
+      "bytes": 123504,
+      "sha256": "8e494149a1f3e6c7f9a2157710cc61926409963da9e1bc7840af4ea337c2c064"
+    },
+    "campaigns/connections/192/scaling-rustsql-2.json": {
+      "bytes": 123528,
+      "sha256": "0a8e63d46daebdeb3a00dfe8876f99b792f4d7386190d7b56f3f954978b3bb42"
+    },
+    "campaigns/connections/192/scaling-rustsql-3.json": {
+      "bytes": 123533,
+      "sha256": "6d2fe7f099105c7f301a74655b3902d8cabfc54e687cf91be3c76a9a1da24693"
+    },
+    "campaigns/connections/24/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "781ec6486d1a9c5a51296481e4adfff6ff0208f09cd016fa4938dac50a5faf8f"
+    },
+    "campaigns/connections/24/postgresql-1-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "694e5663d77e9fedfa03874b7e7becae504b7e4db5c347fbac6fa6a771ef2583"
+    },
+    "campaigns/connections/24/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "11ffba2b242546e2f9483d34cba92039adc8ff70e2daf875374fe9015930ba67"
+    },
+    "campaigns/connections/24/postgresql-2-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "47deb5526e5eed3dec162d88558afb5aa2748ef1033a3861c5dc8e4de282877d"
+    },
+    "campaigns/connections/24/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "ddcfb6ad627c48f6d7be631fd1cd6084421222deed385edf68e92aea4aa2f971"
+    },
+    "campaigns/connections/24/postgresql-3-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "59c77a23169f39a5a4e9ffda20707f6384db651404c4230b55c8c7b25ebeb2bf"
+    },
+    "campaigns/connections/24/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "3adeb2a2cd70eaca2cfb19a3bb6974eefa074b8f43dbca0fd7cfd12e14e88559"
+    },
+    "campaigns/connections/24/rustsql-1-logs/server.log": {
+      "bytes": 7205,
+      "sha256": "9b04ed2a0a3f320c34bf6e4150246a151e63eeb994004685e05aaa3b84668585"
+    },
+    "campaigns/connections/24/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "545a97b3c65dedeb4564e5ceec861eae0ae1726d3cb6afad587e64a9bd66968f"
+    },
+    "campaigns/connections/24/rustsql-2-logs/server.log": {
+      "bytes": 7205,
+      "sha256": "5fb413ea9ca406f87712e8f3ba26948771bd42dd151355934083c403d19756d0"
+    },
+    "campaigns/connections/24/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "e5fb4916d6687d81b21a89dee2ac1a67c0d97670016f85141526704e2684feea"
+    },
+    "campaigns/connections/24/rustsql-3-logs/server.log": {
+      "bytes": 7205,
+      "sha256": "f45f8018f5fbd72603c10ee3299de6ad99f2ee50ef369b2fc34a9d6e7a8b4466"
+    },
+    "campaigns/connections/24/scaling-postgresql-1.json": {
+      "bytes": 51649,
+      "sha256": "503cfced0310a2cadabaf70e01f0f376bd8ef907c6ad222f5deedca8faf2e0c1"
+    },
+    "campaigns/connections/24/scaling-postgresql-2.json": {
+      "bytes": 51690,
+      "sha256": "c6d83f3a0a1caa9516d114a446a88c6faeafe15f4dd5dccd796f5d1680f5a5c3"
+    },
+    "campaigns/connections/24/scaling-postgresql-3.json": {
+      "bytes": 51693,
+      "sha256": "e2eb95a29adb5f4e43d3e02bd00240b1c0b29299a6d334e7e0d269c49e8a7b90"
+    },
+    "campaigns/connections/24/scaling-rustsql-1.json": {
+      "bytes": 47546,
+      "sha256": "2e5729e9a827305f6516784369c3d48d698da6a97e7f7ae7ec4668dfe0d3dcfa"
+    },
+    "campaigns/connections/24/scaling-rustsql-2.json": {
+      "bytes": 47572,
+      "sha256": "e06bf3f51db0526adc78c2af2ee49bf637c88a89f353450e166843374dc472f2"
+    },
+    "campaigns/connections/24/scaling-rustsql-3.json": {
+      "bytes": 47584,
+      "sha256": "a11491f1e50e3b513d4d0b8bbd578018581eb7cf5f3008575592ea0ca7a7bfc5"
+    },
+    "campaigns/connections/3/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "8175cac59d6f144ea87537fa20f782de47fe9462750f1b885cfc0991526a91ea"
+    },
+    "campaigns/connections/3/postgresql-1-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "37f34822cad6dbb7f4d9d80460c61b155b91a59844db7aeaece62006b14766a2"
+    },
+    "campaigns/connections/3/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "266f0d7ad7578ffc407d67d99988e1e4ac72b326c0a24d691237a84cdabff478"
+    },
+    "campaigns/connections/3/postgresql-2-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "199206495a8ec52e28cb9e85b6fc7d1f2d33284106bbca3ff81a683a3560762d"
+    },
+    "campaigns/connections/3/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "cf4f3b12a31ad85715a8014b1233a8f5d010e58c640d35277f69eefeba3e5d83"
+    },
+    "campaigns/connections/3/postgresql-3-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "de82bee6d40631c3e1c22f89c91b576813e01ab1309785e4f85a721da2e501b0"
+    },
+    "campaigns/connections/3/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "ec94205ea468c89e704cf8e7d0a9b03cb123aa75da2452093e94bcb0d62f33b6"
+    },
+    "campaigns/connections/3/rustsql-1-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "2e5360478d384553e9e5ee1ed19aba3282d18bdb2e5fdf59a75d13f686e3bddf"
+    },
+    "campaigns/connections/3/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "9c8caba25059c5130c625c15c35443066cc10a817ab54749692d7d74f42263d7"
+    },
+    "campaigns/connections/3/rustsql-2-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "df73311a550b50f67e8335f3c07dfd319e2e1e350a330372e764247bdf2bab8b"
+    },
+    "campaigns/connections/3/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "801f72fa5d6f906db53596efcd2c4b964482aaf2355d33371b8293dd937fc5ac"
+    },
+    "campaigns/connections/3/rustsql-3-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "9cdf22be2a470cd60ba5253e18b7c23d1fb9f33db0c9ba0909711e470d2c6954"
+    },
+    "campaigns/connections/3/scaling-postgresql-1.json": {
+      "bytes": 42087,
+      "sha256": "ab977b1b0739f2b9869bf0316558b9040db1df9523c5b5a3eb01ded9db818c37"
+    },
+    "campaigns/connections/3/scaling-postgresql-2.json": {
+      "bytes": 42142,
+      "sha256": "af3b1a88f4d736cbbd4e5af2aaece6ff6effa24f414acc77dd47bbb28d3b083f"
+    },
+    "campaigns/connections/3/scaling-postgresql-3.json": {
+      "bytes": 42133,
+      "sha256": "e67aeff5851736b3fbef8fb1c725db2f3cc16764fb9c4efc7f537fc04461eb2a"
+    },
+    "campaigns/connections/3/scaling-rustsql-1.json": {
+      "bytes": 37973,
+      "sha256": "c493c9cb9e4bca19fc2b8f54c8411eb643f818f75911064027d70af0e6938d54"
+    },
+    "campaigns/connections/3/scaling-rustsql-2.json": {
+      "bytes": 38027,
+      "sha256": "a6c4c414f2beb3aea3335859701987ed8bde0eeba4d31227db7a3e50d83768c6"
+    },
+    "campaigns/connections/3/scaling-rustsql-3.json": {
+      "bytes": 38017,
+      "sha256": "aa2c0d4870f517c028f740cf3d104329b39e2d4c8bf75d1a7cd336ca50e86487"
+    },
+    "campaigns/connections/384/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "f7e54e0e9714ca295f80cbedbf3b5f6ed7146824e9eb466b16a8a67d0ba21708"
+    },
+    "campaigns/connections/384/postgresql-1-logs/server.log": {
+      "bytes": 3028,
+      "sha256": "289c9ea434d450ba7bc9ae0a40c67d331ba8907112c32fb644138c4074c6a761"
+    },
+    "campaigns/connections/384/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "1c635a681beebe8ce03aa806bec3758b6a629f4e30acc17c63f46d9d4b8c9dbb"
+    },
+    "campaigns/connections/384/postgresql-2-logs/server.log": {
+      "bytes": 3028,
+      "sha256": "f90a0a4aba2d4d704ec754d4e821b72ca1437154eeffd501498f13e7f585500d"
+    },
+    "campaigns/connections/384/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "8aab74d7df187b980a7efaa74504db9cfafecff968ec09b7638be05cbb49e678"
+    },
+    "campaigns/connections/384/postgresql-3-logs/server.log": {
+      "bytes": 3028,
+      "sha256": "9504a23262e22bbc01d1f627ad930f8f640b0918931d91a20cec82ccd7c4ccf7"
+    },
+    "campaigns/connections/384/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "b55df49213b14ac0ab1a71286dabb8de18dea75003378449fbbfa73f6f6cba68"
+    },
+    "campaigns/connections/384/rustsql-1-logs/server.log": {
+      "bytes": 4084415,
+      "sha256": "cbf81c3372d70a2bea437447757d6f3d6f73ef799eb3fd44687b80b4b707f22d"
+    },
+    "campaigns/connections/384/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "14747b194d8899f145b719c2c38b8e0c5cae3943c9767e29a815fa3f3002b50f"
+    },
+    "campaigns/connections/384/rustsql-2-logs/server.log": {
+      "bytes": 4044107,
+      "sha256": "2da230d42612fb928ec70e13f73cc888a1e8bf5009066a491bbd1bc0fa0deb49"
+    },
+    "campaigns/connections/384/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "5cac3f3acea8bad1d8985550cec394f29b02d363675c9e55af5657b2cd356d56"
+    },
+    "campaigns/connections/384/rustsql-3-logs/server.log": {
+      "bytes": 4027309,
+      "sha256": "98cd554c81c1a63d637b82e5a303827e13fc7e5a3a87923011fbb082e4c7ea9e"
+    },
+    "campaigns/connections/384/scaling-postgresql-1.json": {
+      "bytes": 214462,
+      "sha256": "e9ff4611f5e7ec19484dca9dbf5d564d5bc31710a767cbc0d42487516280e249"
+    },
+    "campaigns/connections/384/scaling-postgresql-2.json": {
+      "bytes": 214468,
+      "sha256": "0483b114c4b65f40dd92ad98c7e5cb8ae6ace13afd70dad0da593aa1f94f2d93"
+    },
+    "campaigns/connections/384/scaling-postgresql-3.json": {
+      "bytes": 214475,
+      "sha256": "45e9b2de42cb8f1d98765c8d323ac27643d774fcaf400463c87528e2f5898c0b"
+    },
+    "campaigns/connections/384/scaling-rustsql-1.json": {
+      "bytes": 210349,
+      "sha256": "95a5b244301d3f99fc1094fca78195cfc9e249acbeecb2001940a7eb7d02aa98"
+    },
+    "campaigns/connections/384/scaling-rustsql-2.json": {
+      "bytes": 210381,
+      "sha256": "c6723f13eef7b75fe707d67cd9b4ead82dce03b36d59ba56706c12575c7b5896"
+    },
+    "campaigns/connections/384/scaling-rustsql-3.json": {
+      "bytes": 210384,
+      "sha256": "037a2bbbd285dc803b832dc51f051df7090b0aa2a44fdfe6b43b61552c90643a"
+    },
+    "campaigns/connections/48/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "e54d36997ae5423ef431e7244137abee4902496750a02bdaaa22dd56080a3b4b"
+    },
+    "campaigns/connections/48/postgresql-1-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "b7961947ed077b30315397f8dd84d14e0fb23b6f9b09c5ff5557cb670d3ec6f8"
+    },
+    "campaigns/connections/48/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "a04357941c78c70e09a5703205576afc3f158e292d310a43b65717441a62e8ac"
+    },
+    "campaigns/connections/48/postgresql-2-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "243531aab18fbca2115816fbb368ee7baa23cb9bf852665e0ca972f9adaed1aa"
+    },
+    "campaigns/connections/48/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "5b40f80ea930ea5f29206ac3e6c98f7f28a3c575fc718bf58dae91cff6cfd91c"
+    },
+    "campaigns/connections/48/postgresql-3-logs/server.log": {
+      "bytes": 3025,
+      "sha256": "0dc0209283d87ff786b5a6ad6116baa83a75fbb2e23760965c90f9bb07c47c7e"
+    },
+    "campaigns/connections/48/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "3d349c9ec8be8f983530c1ead27cb4875e8f4e49113a9410476915ea039ec639"
+    },
+    "campaigns/connections/48/rustsql-1-logs/server.log": {
+      "bytes": 41589,
+      "sha256": "ffacecd06caca052ba191a03568cc42278ca18f1e655ed811c1c1b1d1ec41d73"
+    },
+    "campaigns/connections/48/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "dcdf6772ef42a7351d6a162c45e678abdc7b7386721235a0878a95d602086438"
+    },
+    "campaigns/connections/48/rustsql-2-logs/server.log": {
+      "bytes": 32571,
+      "sha256": "6eb43bc01b4dce4ac59f87872355bd2509934dee9ca90b1b2f573aa5853b183a"
+    },
+    "campaigns/connections/48/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "484a96d6a499ad0596a3ab0c25f4bb264005f305c6292b8334d9a1d05dd08703"
+    },
+    "campaigns/connections/48/rustsql-3-logs/server.log": {
+      "bytes": 32910,
+      "sha256": "90dd88b877a8efde026bca70dd4076204c66ba867595ade611cbc852693a0cd3"
+    },
+    "campaigns/connections/48/scaling-postgresql-1.json": {
+      "bytes": 62509,
+      "sha256": "0eea7e48a677f336be6979144a7bddd4886eb6161c4e3e2f0652dcb36315544f"
+    },
+    "campaigns/connections/48/scaling-postgresql-2.json": {
+      "bytes": 62542,
+      "sha256": "06bff6145027ee797341c4a8a5d94e6546d57cb142f33c5c36ecee259f9b634a"
+    },
+    "campaigns/connections/48/scaling-postgresql-3.json": {
+      "bytes": 62545,
+      "sha256": "80b077f2ec55c4511c1a54e7ec4a08dfeaf5bc6bf47cb276a9a8c796f7bddbbe"
+    },
+    "campaigns/connections/48/scaling-rustsql-1.json": {
+      "bytes": 58404,
+      "sha256": "a67947e87ce01dcf01952c1ff1d9678b8db5c70048f262b02150642766a4eec1"
+    },
+    "campaigns/connections/48/scaling-rustsql-2.json": {
+      "bytes": 58438,
+      "sha256": "95fd295b0838f200d3b78b0d544628b2c55c9f9dbd23548d2816d9efd55eaf7e"
+    },
+    "campaigns/connections/48/scaling-rustsql-3.json": {
+      "bytes": 58433,
+      "sha256": "82bbba02c8047f890d570eebd40cb1615d89a00d597a94f7fb1c64d6154f459f"
+    },
+    "campaigns/connections/6/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "e1cc0c94b5048b93370676f4ab81cdc5db090a28426ab17ed7a9b41f4a879824"
+    },
+    "campaigns/connections/6/postgresql-1-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "78fba25a2490ff913b9155e9d5546c65c24a9fc2b98d4e0cd83b0a0885c25872"
+    },
+    "campaigns/connections/6/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "5c64296714252a1fb1ab73ece6005e6b68f5540c876cf7674b016b0112db655c"
+    },
+    "campaigns/connections/6/postgresql-2-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "a2d868b06f343c3f8c16ab537667c6adc300cbc84fbdae3c8bd88a2b49b96009"
+    },
+    "campaigns/connections/6/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "31690f9ce7181ab7c36c85ab0aa47f218e237f0674876a55b4a8421445d00e70"
+    },
+    "campaigns/connections/6/postgresql-3-logs/server.log": {
+      "bytes": 3023,
+      "sha256": "0adb337196ad0d56c22d50e8ba5696e07c3ab353c02fbfcf5693cec5d5d521ed"
+    },
+    "campaigns/connections/6/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "ddfbefdfd9d41808574627f6fdeeeb206c0f224e6d6d9a4ee02f7af23924a3b0"
+    },
+    "campaigns/connections/6/rustsql-1-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "66e94f69e732fe1aa4ffa611f0306fcf47a4eaff173f3377288b4f452aa7d94c"
+    },
+    "campaigns/connections/6/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "f0379e8185e9229c8c10b1d52ee672abd8968c8d1091378f17d049a391186c83"
+    },
+    "campaigns/connections/6/rustsql-2-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "1fa031cd1d0cba1fe8974157476dde24ea50b643ec9d8a9b0b3574136cb092e6"
+    },
+    "campaigns/connections/6/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "c4d148528d85036e763877bc1645243fabbc40c37fa111825bf651593abd769c"
+    },
+    "campaigns/connections/6/rustsql-3-logs/server.log": {
+      "bytes": 7203,
+      "sha256": "0b19d96920068a8abb4b99de3765d3f1243d1e40a19daa7d1f7aa496ee4b6d5b"
+    },
+    "campaigns/connections/6/scaling-postgresql-1.json": {
+      "bytes": 43467,
+      "sha256": "475cf371c614b9677b50aff7cd74dea04d667df53801c82ac1137a9c7f65a5d1"
+    },
+    "campaigns/connections/6/scaling-postgresql-2.json": {
+      "bytes": 43512,
+      "sha256": "fe0d4206165dc18848555b8f82c00ff53f9e9ff677d9aeac4c554e8b87ff35ad"
+    },
+    "campaigns/connections/6/scaling-postgresql-3.json": {
+      "bytes": 43506,
+      "sha256": "5fd2a1d5b175530e733aefba7ad02c0d8a9ebc2bacf91dbb254c072d56880ae9"
+    },
+    "campaigns/connections/6/scaling-rustsql-1.json": {
+      "bytes": 39336,
+      "sha256": "84d2ca3eee55942cae830074d83dbfe94bf83a3789062b1228a58c55b5066fc1"
+    },
+    "campaigns/connections/6/scaling-rustsql-2.json": {
+      "bytes": 39381,
+      "sha256": "a411e2c4f89d227be1466f77121ea84d3c99099dac47f1a5fdc3f115a04b7a23"
+    },
+    "campaigns/connections/6/scaling-rustsql-3.json": {
+      "bytes": 39395,
+      "sha256": "a3145a4ee9bc967bdbd72ade72c82805be829f843e6e84ce28cb2eaebe43e1a7"
+    },
+    "campaigns/connections/768/failed-postgresql-1/initdb.log": {
+      "bytes": 958,
+      "sha256": "b4fa75a6ddb95bee57b79947c7d8f0843da19b9c930c1b0e5def1e31f849112e"
+    },
+    "campaigns/connections/768/failed-postgresql-1/server.log": {
+      "bytes": 255340,
+      "sha256": "6ba3b87233d316220738313aca43bfc0836523674f3d37112b2ef9d588974b7e"
+    },
+    "campaigns/connections/768/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "653aa267a3ae0dc3054d12580160324d89fb1cb677b23dc63dd51c7a86b6dc04"
+    },
+    "campaigns/connections/768/rustsql-1-logs/server.log": {
+      "bytes": 7899948,
+      "sha256": "e7470d1a692cc70a0d522b400650ba741ac0cb1b8986aabeb906fbbcec493b96"
+    },
+    "campaigns/connections/768/scaling-postgresql-1.json": {
+      "bytes": 22381,
+      "sha256": "c324c6b7f3eecb018cf04b84b91f52d973a6e441653d044fdbac1a5fb29a3533"
+    },
+    "campaigns/connections/768/scaling-rustsql-1.json": {
+      "bytes": 383958,
+      "sha256": "81c79121ded8b1e81a8249a56a3dda69e65f4808b201983367acc1eb721bc353"
+    },
+    "campaigns/connections/96/postgresql-1-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "deca099e3f135c422874e07ae011bdd692f5e32b7e0d6dc9a17ae57b050721c5"
+    },
+    "campaigns/connections/96/postgresql-1-logs/server.log": {
+      "bytes": 3026,
+      "sha256": "32c8f04877ce9eb3155044a45a8c2f8c9599abd7cf13cc26b48e136125b04527"
+    },
+    "campaigns/connections/96/postgresql-2-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "2d69ff50df2441f96f56cb19423f616a757ec1bb6b899515b8a1ab2957e21290"
+    },
+    "campaigns/connections/96/postgresql-2-logs/server.log": {
+      "bytes": 3026,
+      "sha256": "f8b0f15b36221c6c93523209497805654f21ee324a2d580f05f3b9cb36ebb2b2"
+    },
+    "campaigns/connections/96/postgresql-3-logs/initdb.log": {
+      "bytes": 958,
+      "sha256": "02ea476d3e8b9c262f25a045e607104365043318a8f6b874d3b8bea44cb420f0"
+    },
+    "campaigns/connections/96/postgresql-3-logs/server.log": {
+      "bytes": 3026,
+      "sha256": "55c118a8d62384ef94aed0e7cee9316bbcfe306c967d0f71d9599d17de3f266c"
+    },
+    "campaigns/connections/96/rustsql-1-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "ebe06e70d43dc6b51cba74a1fc55a0b964b6e8be9ea943114232c440500efdfb"
+    },
+    "campaigns/connections/96/rustsql-1-logs/server.log": {
+      "bytes": 946236,
+      "sha256": "222293d4b557bb067bd27cd48f816e3b0384c379cff4af18c1f1d51a8fba5948"
+    },
+    "campaigns/connections/96/rustsql-2-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "f054e0eb50c96512f83aaf75b57f021ab674cf049435a7b2b4cd158e940e29cd"
+    },
+    "campaigns/connections/96/rustsql-2-logs/server.log": {
+      "bytes": 928018,
+      "sha256": "b3e25b93bc8539de457813c90c2e9b5d01448841ecdf3270fff96bb8093cd306"
+    },
+    "campaigns/connections/96/rustsql-3-logs/initdb.log": {
+      "bytes": 2114,
+      "sha256": "fe15002c3860b08ff80a077f15ab5717ec29c4767ddc3534deea59f4f87e0474"
+    },
+    "campaigns/connections/96/rustsql-3-logs/server.log": {
+      "bytes": 956825,
+      "sha256": "6e2430a197141c19289ee504cc10e9ae23dd50417e000551de6430e3d514c41a"
+    },
+    "campaigns/connections/96/scaling-postgresql-1.json": {
+      "bytes": 84178,
+      "sha256": "400ca3079dd99c742bf4b5f9c28e79ac61854af7c7217a16cc1ed437056b9c69"
+    },
+    "campaigns/connections/96/scaling-postgresql-2.json": {
+      "bytes": 84225,
+      "sha256": "aa5a98bc36bc97f5ebd4fb6489e24fd748ceffd1f5bfb1abc644f141ede083fd"
+    },
+    "campaigns/connections/96/scaling-postgresql-3.json": {
+      "bytes": 84214,
+      "sha256": "524f84cd0b56b9fcf0457e7596e26602591eb3860c5399933d9924b0dc0009ac"
+    },
+    "campaigns/connections/96/scaling-rustsql-1.json": {
+      "bytes": 80092,
+      "sha256": "39193e093d668870f4d07c66feeab4c8fbe2393de3e0f96e7e380ab52f8f7563"
+    },
+    "campaigns/connections/96/scaling-rustsql-2.json": {
+      "bytes": 80120,
+      "sha256": "7e57ef36cfd4e20d448e530a7be61992370be4bd87d1d1ddecb61a49307f1ceb"
+    },
+    "campaigns/connections/96/scaling-rustsql-3.json": {
+      "bytes": 80125,
+      "sha256": "3fce1927a89bf46b8416e46a253a895ef0f49dba3b3854e4da6f995ad6d8d93b"
+    },
+    "campaigns/connections/metadata.json": {
+      "bytes": 3538,
+      "sha256": "53582ed70d7626acc82bad63d91195d2ffbae1ac89bc7b100ae1a275000be842"
+    },
+    "campaigns/connections/summary.json": {
+      "bytes": 15207,
+      "sha256": "0e5f739219947f8d0e4a1bf6c40a1404b1339a1081253809d3c6781f34e2844f"
+    },
+    "campaigns/data/10000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "435686241d1ed875f6ad4cabb418707fb8050a3d7e9b600ed0be30e85f380755"
+    },
+    "campaigns/data/10000/postgresql-1-logs/server.log": {
+      "bytes": 2956,
+      "sha256": "f24dc571c2ba565be77395660e72b7921d817986512b8f982d1d859e81cb3ecf"
+    },
+    "campaigns/data/10000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "4876fe1f429519993ab20bf259db6ce743eec90f37417b4e80de94a060b4b077"
+    },
+    "campaigns/data/10000/postgresql-2-logs/server.log": {
+      "bytes": 3008,
+      "sha256": "4c6f6c96a748e3b094f9662e05fdda0f3ec9fe2bfdb1f9e882b835f1e0506f0d"
+    },
+    "campaigns/data/10000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "9963fdedc92596f6e82cd0740e6c87704197161a812d32b92d72e64a4161fabe"
+    },
+    "campaigns/data/10000/postgresql-3-logs/server.log": {
+      "bytes": 3008,
+      "sha256": "192aee492fc6a49ae49ca2b68860f3f77ffc4aee3761d0e7f557086e80c6c6bc"
+    },
+    "campaigns/data/10000/rustsql-1-logs/initdb.log": {
+      "bytes": 2092,
+      "sha256": "1417088e5b254affcce8de41c1c313aa0f9537d7f72ed80878ee275c1763b269"
+    },
+    "campaigns/data/10000/rustsql-1-logs/server.log": {
+      "bytes": 24908,
+      "sha256": "12daa0e7249fe0ddafa363ff7e3dbf486924f8ae9af2d593b129fae820ec6092"
+    },
+    "campaigns/data/10000/rustsql-2-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "d9c08a180a333cbd9f2f018cb447723ceda4dc6f2b70a23a16eccff5c110ce52"
+    },
+    "campaigns/data/10000/rustsql-2-logs/server.log": {
+      "bytes": 24288,
+      "sha256": "1d184c19d2f2cf84269857e9cdd97ea6523cc75d0fd3f2d38f59767ddd79353b"
+    },
+    "campaigns/data/10000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "7adbcedd65312e2916d22d5030f23d75fc7b592c79c44027975a4b16817b3462"
+    },
+    "campaigns/data/10000/rustsql-3-logs/server.log": {
+      "bytes": 23349,
+      "sha256": "f96da10224bfa5700da6bdead5238a1b444893cd0f37c1ce0746b8577e64c922"
+    },
+    "campaigns/data/10000/scaling-postgresql-1.json": {
+      "bytes": 37349,
+      "sha256": "52ff25e4e119333b4231cae4a125095801adc1a15f0c4be5ce6a02327e62aff9"
+    },
+    "campaigns/data/10000/scaling-postgresql-2.json": {
+      "bytes": 37384,
+      "sha256": "1def3f8b157bfa402d93d0188d9e5ecd516307e0af21305a6ad4a2171c46510f"
+    },
+    "campaigns/data/10000/scaling-postgresql-3.json": {
+      "bytes": 37390,
+      "sha256": "06536e9a5a1de363780e2b3ee2c38e48a6b87a1029e6f494d660a0ab34c90f26"
+    },
+    "campaigns/data/10000/scaling-rustsql-1.json": {
+      "bytes": 37431,
+      "sha256": "ef0eebcb9d061af4d0a9c8ac3cc7283f9e519d8ba39d5942cea9d7667c8be238"
+    },
+    "campaigns/data/10000/scaling-rustsql-2.json": {
+      "bytes": 37450,
+      "sha256": "045d0507e3731906c3ebb4229d53acdbf036982141f6189ec8a05abec5e1104c"
+    },
+    "campaigns/data/10000/scaling-rustsql-3.json": {
+      "bytes": 37455,
+      "sha256": "2b61f50dd806f9bef24efe9e530ebf1e0ae9f856df38f7bbb7376845a5d8040f"
+    },
+    "campaigns/data/100000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "682230571399c1a3f71ba93e583ccc5fe46b8dd22b1070e396f53cf949dbad2d"
+    },
+    "campaigns/data/100000/postgresql-1-logs/server.log": {
+      "bytes": 2956,
+      "sha256": "9df8b34e7e11b0f0e76c14e9e1c19deea4a2f9bae6bcf1836cfefc4b693949bc"
+    },
+    "campaigns/data/100000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "c4a949508b64e9a74a1a49c3a942ba780498d8560aaa40589e808c7582c02d3e"
+    },
+    "campaigns/data/100000/postgresql-2-logs/server.log": {
+      "bytes": 3008,
+      "sha256": "282bfc64f294e9070ea3808f4038f4b45fe7cedd2c05abc66b5d905c68d29048"
+    },
+    "campaigns/data/100000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "bbad22b6a077fb9f21280a8b489639b2d2711655e25afd42cec0af3edf5f0b84"
+    },
+    "campaigns/data/100000/postgresql-3-logs/server.log": {
+      "bytes": 3008,
+      "sha256": "5e34a60ae3e981d5df5fdfbebf2613d822917860f29c0450831dddaae4c889b8"
+    },
+    "campaigns/data/100000/rustsql-1-logs/initdb.log": {
+      "bytes": 2092,
+      "sha256": "6ab61d9c32aa53e5c41ebb3316e5d171b3414beee8f8927d9c087b552c598e66"
+    },
+    "campaigns/data/100000/rustsql-1-logs/server.log": {
+      "bytes": 19688,
+      "sha256": "f4fae60cc6c9e74fb3234cef06a90a10571e7f5de83fa29a6af4a2de3661a7a0"
+    },
+    "campaigns/data/100000/rustsql-2-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "87660685dd73db7ec70d91f87ffe75b9cac0a4acd2c816646a264612a0019026"
+    },
+    "campaigns/data/100000/rustsql-2-logs/server.log": {
+      "bytes": 19333,
+      "sha256": "58ebf41432b4e8fffd74e71421b8662e59f2371ba035672781ea6cadebeef482"
+    },
+    "campaigns/data/100000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "ab3b903addf8cac5d81992099180fffd02ba083ef7d93726b3080950dde60e14"
+    },
+    "campaigns/data/100000/rustsql-3-logs/server.log": {
+      "bytes": 20406,
+      "sha256": "559d0601eb630042f81dcde4f5083b1c42cbb4d390172a516d2d37dddae20f38"
+    },
+    "campaigns/data/100000/scaling-postgresql-1.json": {
+      "bytes": 37416,
+      "sha256": "607be1f117998f6c2b15a5868e298a87538f56a0cd6dfe439fadd882f4dde90e"
+    },
+    "campaigns/data/100000/scaling-postgresql-2.json": {
+      "bytes": 37437,
+      "sha256": "f5b72ef9fb616eb38c12612d7c97746eb81411f507812392efade16e207d9010"
+    },
+    "campaigns/data/100000/scaling-postgresql-3.json": {
+      "bytes": 37431,
+      "sha256": "25406002640d09c9cb4a8c35e01fd1a64b5d0a5ab6094c31400cbdbcfdbba298"
+    },
+    "campaigns/data/100000/scaling-rustsql-1.json": {
+      "bytes": 37474,
+      "sha256": "6c3215baf9954a0167a0fb3d6e5f002498e1089c6e4210dc513e93570896f6f8"
+    },
+    "campaigns/data/100000/scaling-rustsql-2.json": {
+      "bytes": 37486,
+      "sha256": "c98a2ed48f42b35adeeda45741cc95c85a87d5e694f78dbd8ec723c887e72f7b"
+    },
+    "campaigns/data/100000/scaling-rustsql-3.json": {
+      "bytes": 37490,
+      "sha256": "34f1c80de0b70aacba50de69548bd45b658ce8ab259f9af0e97001862b4d3fff"
+    },
+    "campaigns/data/1000000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "d8b9684c9cbd3d79585ac3f2a006526b071c2f563cdeb4684be00608edef4a70"
+    },
+    "campaigns/data/1000000/postgresql-1-logs/server.log": {
+      "bytes": 2983,
+      "sha256": "bdd242ee9fcdf1b0e007e6f0db93d88061d7c1bebe2dd22e9e70b8efba4d20bb"
+    },
+    "campaigns/data/1000000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "38a61025454570ddcc40c6abf400aa10fa7e3ff9df8a85e1bea96bc6fd84cfe0"
+    },
+    "campaigns/data/1000000/postgresql-2-logs/server.log": {
+      "bytes": 3009,
+      "sha256": "2de950dc817feb54741d03118622bdf53bb5d9fd9d0388d9a6d36ceab67f90f7"
+    },
+    "campaigns/data/1000000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "ddcb450dd149dafe8944c4b9f11f048052022f2f4f58047a8aef1da9b1de9875"
+    },
+    "campaigns/data/1000000/postgresql-3-logs/server.log": {
+      "bytes": 3009,
+      "sha256": "5bb8678a0c0ccb8553bd484d5adb04e5f2d3ff8a369340101d579a37d4ca6bef"
+    },
+    "campaigns/data/1000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "70d9c763eaf69d69d505158309cec459dcea6459ff958f0c2a11cd13455b11dd"
+    },
+    "campaigns/data/1000000/rustsql-1-logs/server.log": {
+      "bytes": 7166,
+      "sha256": "48d2f7ce4f2d2409999dfbe0c73a05f8b0106c1cdf214f3ec96898607b4f0fe1"
+    },
+    "campaigns/data/1000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "368acd79a49438551e68bbd42c17c35fb20bd1799f1f11a320550b82fc658349"
+    },
+    "campaigns/data/1000000/rustsql-2-logs/server.log": {
+      "bytes": 7166,
+      "sha256": "468f1b7bb67da8582b954f63d9fe34fd30fe572da9e1e57576553209e751ce86"
+    },
+    "campaigns/data/1000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "7e3e4063bff77b83d8af6e6d4cc2165752ea0db36f77abf3b0ebc0c7c5fb703d"
+    },
+    "campaigns/data/1000000/rustsql-3-logs/server.log": {
+      "bytes": 7189,
+      "sha256": "0e58e67e198030550204a581cb5d7447a6bb20162aeaebab10e7bf40bb294c56"
+    },
+    "campaigns/data/1000000/scaling-postgresql-1.json": {
+      "bytes": 41641,
+      "sha256": "f111593e846ebe7d19ee3c161adb60fa3a7a51400a510d0c8036f3e3b5e0826c"
+    },
+    "campaigns/data/1000000/scaling-postgresql-2.json": {
+      "bytes": 41653,
+      "sha256": "f4683d3949836e314251495275c8b9e6e24d99fc35d5c51f52eaba7189ff0f46"
+    },
+    "campaigns/data/1000000/scaling-postgresql-3.json": {
+      "bytes": 41665,
+      "sha256": "066e788fd078f006eff8980fa5a6d9f793b521cbe10486e26d86907d5f72d52d"
+    },
+    "campaigns/data/1000000/scaling-rustsql-1.json": {
+      "bytes": 37510,
+      "sha256": "b89093f04240477add61b324fe67e0feea770deca41021a1c5a8f63c5b50ded9"
+    },
+    "campaigns/data/1000000/scaling-rustsql-2.json": {
+      "bytes": 37519,
+      "sha256": "37de0ef88390fb3bfe709c512fcbe7966d4472ce02da1b24cb18d2bc8acf66d2"
+    },
+    "campaigns/data/1000000/scaling-rustsql-3.json": {
+      "bytes": 37530,
+      "sha256": "bc2bb7664b3b06e565655de0b526cee1af97299b61167fe6d234508886231ad2"
+    },
+    "campaigns/data/10000000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "97452fecaebd62aec7a379b50aaf47ea8b09b3d5849a2a43418f30aed9c1d2b2"
+    },
+    "campaigns/data/10000000/postgresql-1-logs/server.log": {
+      "bytes": 3591,
+      "sha256": "7a02ff42c870079a34586a6e41b0a39a01bdff079b9f6eaad85f5de4da52924f"
+    },
+    "campaigns/data/10000000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "3853f46b1bf9ead053135899d4e1440589e4647edd1ec0d70b02366c37388db7"
+    },
+    "campaigns/data/10000000/postgresql-2-logs/server.log": {
+      "bytes": 3591,
+      "sha256": "7c0ba24651fba99dee9502db38790952c6cbfb46ad197b35fe0cb8b9b1125b0c"
+    },
+    "campaigns/data/10000000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "eb0e92991d1422ec33371101751cf01e12ce0e2a935b17845abfec1158e50def"
+    },
+    "campaigns/data/10000000/postgresql-3-logs/server.log": {
+      "bytes": 3621,
+      "sha256": "3925a1f3fbf5269185128e2b384a767c0d9c40f306f82ca7c5e5e2404d491a62"
+    },
+    "campaigns/data/10000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "75d044546da8743089fdc5aa35d91f96b483f17de0e248fc4a6f7d4ba8bdb350"
+    },
+    "campaigns/data/10000000/rustsql-1-logs/server.log": {
+      "bytes": 7170,
+      "sha256": "8c65e46c6b65daa6b3a552810bea24e65fefe40080d17e69609e70d3a16aade8"
+    },
+    "campaigns/data/10000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "dee757db4f8b3700e4108335c131356113edaef17ebc0cc7f2aca03ec0a6b0ab"
+    },
+    "campaigns/data/10000000/rustsql-2-logs/server.log": {
+      "bytes": 7169,
+      "sha256": "c1c79ebbce8ad84031e737b251e4e8bed70880e78f37dcebeabcaca275b8f2a5"
+    },
+    "campaigns/data/10000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "6d323b910ba0c43cb093f4e7fc4a58810f4d2aba1e9bbaea19581b1e03be2374"
+    },
+    "campaigns/data/10000000/rustsql-3-logs/server.log": {
+      "bytes": 7192,
+      "sha256": "ae2e8c6e363d9e4eb2537bdb32150bacb2c37ad40f03b4475d5509a70da2c55e"
+    },
+    "campaigns/data/10000000/scaling-postgresql-1.json": {
+      "bytes": 41881,
+      "sha256": "7d125c54b6eae455581690d1614fc462be9a261420911d69431493aadcebddc3"
+    },
+    "campaigns/data/10000000/scaling-postgresql-2.json": {
+      "bytes": 41885,
+      "sha256": "65557642b3b714ee261c2b998fdf3f32b124109e39e1859a7f1d965419726d97"
+    },
+    "campaigns/data/10000000/scaling-postgresql-3.json": {
+      "bytes": 41904,
+      "sha256": "0b9b13b97e9dd0ea1ea5bd5206146ab9902aef8233fd77f1efcd1869226370c4"
+    },
+    "campaigns/data/10000000/scaling-rustsql-1.json": {
+      "bytes": 37561,
+      "sha256": "1f1e9e9c67a414eef2ebcf0a72ea4d7856df56ac4ac0b9801274d04447f2301d"
+    },
+    "campaigns/data/10000000/scaling-rustsql-2.json": {
+      "bytes": 37570,
+      "sha256": "dc0aa5d7ae735abb9b3d7160d46d2a0ad49a7dcf29d45caa02386f5832ea8a92"
+    },
+    "campaigns/data/10000000/scaling-rustsql-3.json": {
+      "bytes": 37579,
+      "sha256": "e3a39f7cb37579b187863edeb17c250fb11c1bbb1f44d1e60a49808f38ffe7bc"
+    },
+    "campaigns/data/100000000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "7f39c11fc767098165f93c8e6eda825ef753d784ea83c6bc68675f0ed267bc62"
+    },
+    "campaigns/data/100000000/postgresql-1-logs/server.log": {
+      "bytes": 15462,
+      "sha256": "89875f3df98fc1f5deabf92e316270e76bf28da37ac65a0ec8c3266200b02590"
+    },
+    "campaigns/data/100000000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "0832e5c99fb6e468a7260e91b72a63e6dde69f626a3ba1bf5b1e23601c454e77"
+    },
+    "campaigns/data/100000000/postgresql-2-logs/server.log": {
+      "bytes": 15459,
+      "sha256": "ab45f2bba76e2fff13cb1865620c6e1eb3077fdd9e2681a857d840716402e3a2"
+    },
+    "campaigns/data/100000000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "47f9176d7dceb7e1f074f633e20d5771a694f7a0e3e702f203c358293e413bdf"
+    },
+    "campaigns/data/100000000/postgresql-3-logs/server.log": {
+      "bytes": 15571,
+      "sha256": "112533d0b92b8a202b24438198f071ec55c34ca21e8d5f070d0c15ac2bef1092"
+    },
+    "campaigns/data/100000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "a1477737a56816260cdd2021fba59806eb697f418cbb4e4acda8e6be64896d54"
+    },
+    "campaigns/data/100000000/rustsql-1-logs/server.log": {
+      "bytes": 7390,
+      "sha256": "43ef602111b26e00cc7d5c7707e20130da3d262184c0edde7e8e41ea7f05d8d0"
+    },
+    "campaigns/data/100000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "cac6b684e3ca2c6f4168647b11d4bb5d13a3e1c1a88c7d4b1228b06eee2f14fb"
+    },
+    "campaigns/data/100000000/rustsql-2-logs/server.log": {
+      "bytes": 7390,
+      "sha256": "fd9a314b4fbf26c91093ce0e0b25531a4ec328aeb25a3ee2f64eb71d86cdc8af"
+    },
+    "campaigns/data/100000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "bc1611380cfe86c65911bae8d2a04dd8fdcbd3db3f7acc4e0854238b92795464"
+    },
+    "campaigns/data/100000000/rustsql-3-logs/server.log": {
+      "bytes": 7414,
+      "sha256": "7d5fb0965e189c84e0c28a6ee915fa5ada4465c7ca09c94709893680310583a0"
+    },
+    "campaigns/data/100000000/scaling-postgresql-1.json": {
+      "bytes": 41392,
+      "sha256": "bbee6ebe1e9c9578984ba6ca8c2b916168722e8c5523e7f1f1324cac9b2b7d0a"
+    },
+    "campaigns/data/100000000/scaling-postgresql-2.json": {
+      "bytes": 41401,
+      "sha256": "fdbc5bd8a37ca0c2d8a29dca2362a9f62375011c3e23dd2d863c9692907c507b"
+    },
+    "campaigns/data/100000000/scaling-postgresql-3.json": {
+      "bytes": 41412,
+      "sha256": "26a9cf65df9a2bc392e2762a17dfd500d0af551265da08b0cae1e9b3391561f9"
+    },
+    "campaigns/data/100000000/scaling-rustsql-1.json": {
+      "bytes": 37698,
+      "sha256": "ca13ec148f46833c031b595120c23cba4d8764f20ee67113bacc4b655af6dbdc"
+    },
+    "campaigns/data/100000000/scaling-rustsql-2.json": {
+      "bytes": 37707,
+      "sha256": "f95599c32e1100bc0f7d0fe5588d828cf3bcd521e8227179dfdef6a36ec7c543"
+    },
+    "campaigns/data/100000000/scaling-rustsql-3.json": {
+      "bytes": 37713,
+      "sha256": "44632b06ceee0399bd57a129fbb3004ac16f60f477ca5e969a37088b6b71349c"
+    },
+    "campaigns/data/30000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "eed33a7af64ba657f97d9153d71efa96ab20a69204d3e91585dcefca178ce1ef"
+    },
+    "campaigns/data/30000/postgresql-1-logs/server.log": {
+      "bytes": 2956,
+      "sha256": "c25c1aec5e7a8fccc649b8bca0f4fa59df7592bc3ea00225519dd0d62ff0df18"
+    },
+    "campaigns/data/30000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "daaed642fbf4f41bcd9a88044a7d874a9e80d0e01e45ba534e2cccdaf9f0b2cf"
+    },
+    "campaigns/data/30000/postgresql-2-logs/server.log": {
+      "bytes": 3008,
+      "sha256": "3fcc71fcbfecf22bb2c3eff4f28c304356327b5e1e58558a5a72fe6a57bac6fe"
+    },
+    "campaigns/data/30000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "afed1234265fb4c468791fa5c81d636295e5c45257377d3c9bdafbb2279241be"
+    },
+    "campaigns/data/30000/postgresql-3-logs/server.log": {
+      "bytes": 3008,
+      "sha256": "e527c1cae2b936ffbd243b1aa5800311ebab13c7e0ac39809649e8966873feeb"
+    },
+    "campaigns/data/30000/rustsql-1-logs/initdb.log": {
+      "bytes": 2092,
+      "sha256": "9a1dac0b3f0f782fd7bd3cde8ae55da13f174d04d604ab178b62cbe5bfc24d6e"
+    },
+    "campaigns/data/30000/rustsql-1-logs/server.log": {
+      "bytes": 23574,
+      "sha256": "9c15252549b7861dde9f99964de8362e0b943ecafa70d9feeb901c58033034b3"
+    },
+    "campaigns/data/30000/rustsql-2-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "09bf02100eed03ed916e8375d2fb74c87225877f88cf3ac6e6a65172b6f4ccca"
+    },
+    "campaigns/data/30000/rustsql-2-logs/server.log": {
+      "bytes": 26831,
+      "sha256": "65eab6fb45f529ec53e85c4fa84282906e73ad00d39ec8267cc9bc0c3025f98f"
+    },
+    "campaigns/data/30000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "28adc4e67780d4806aee9d08dbb30de5bf09b697001652b2d6f96be572aa0dd1"
+    },
+    "campaigns/data/30000/rustsql-3-logs/server.log": {
+      "bytes": 25224,
+      "sha256": "bac1a3ffd8a6e5b51fa30b7db770faec2a3df42c4b33db413cfe8764f345edef"
+    },
+    "campaigns/data/30000/scaling-postgresql-1.json": {
+      "bytes": 37369,
+      "sha256": "2866ebb0404a72feeecff22ef32cf8266efb6d107ba948f021526e9883607294"
+    },
+    "campaigns/data/30000/scaling-postgresql-2.json": {
+      "bytes": 37366,
+      "sha256": "a4ab4a97818ee805a49860d40835ebeb42598d0498fb24256ec505bc6fe4a08f"
+    },
+    "campaigns/data/30000/scaling-postgresql-3.json": {
+      "bytes": 37393,
+      "sha256": "caa9394199b47d428c4b7157b5fe5ab83be5edd9cbfeb564acf8953bd5d1f316"
+    },
+    "campaigns/data/30000/scaling-rustsql-1.json": {
+      "bytes": 37449,
+      "sha256": "662a63671e927983efe6d755aebcc1c31bfe1d95309bf9271bb42f890ff2786e"
+    },
+    "campaigns/data/30000/scaling-rustsql-2.json": {
+      "bytes": 37472,
+      "sha256": "236e32ebf4dd75bffb76a311079040bb67e6be2463eb5dbc0effd25d4fb54cf7"
+    },
+    "campaigns/data/30000/scaling-rustsql-3.json": {
+      "bytes": 37468,
+      "sha256": "3f34629d21a36e495ba2eb6dbc16a50142a1045f71a9c11c3609bd4aa4b9e519"
+    },
+    "campaigns/data/300000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "5b4886dd9a11041fac3dd87ba67ae9c8a231efad08806d1bc02509cf39b137fa"
+    },
+    "campaigns/data/300000/postgresql-1-logs/server.log": {
+      "bytes": 2983,
+      "sha256": "faa324f1f29e08d7bdb320dbca5443a06702adcf4fc2410df0dc6c043beb1568"
+    },
+    "campaigns/data/300000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "7ff0e9b311c9df630acfedd4f4730a95995b2ec3c6ad838b9df5d2a639d5b363"
+    },
+    "campaigns/data/300000/postgresql-2-logs/server.log": {
+      "bytes": 3009,
+      "sha256": "896af389fc3b22e5972e1969d7376d75f8008273a6c19fc7e634dc928d016d13"
+    },
+    "campaigns/data/300000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "2102ac986f163fa766201d9acb285dec75874f09008eea5eab9192ddb9dc9d17"
+    },
+    "campaigns/data/300000/postgresql-3-logs/server.log": {
+      "bytes": 3009,
+      "sha256": "b05c2f9e41e2073611ed97536473e2e4ed203588d528a9322c17c76396024bc0"
+    },
+    "campaigns/data/300000/rustsql-1-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "746b379afd12a55c9fafeab42ddde660a8e828f0182006fc24e3048f8bb69402"
+    },
+    "campaigns/data/300000/rustsql-1-logs/server.log": {
+      "bytes": 14566,
+      "sha256": "b2ab6486d7b374539ba758ddaf4000de6dc924b4fffdedb4fdecfc5a43db67ac"
+    },
+    "campaigns/data/300000/rustsql-2-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "5c446d968626c1e6dd7b1cc12f9f7c085497704aebf37e354f60462618708326"
+    },
+    "campaigns/data/300000/rustsql-2-logs/server.log": {
+      "bytes": 12904,
+      "sha256": "76846c1b790accdf6b70c186532ea39e257669d44e1e4b2f18f5ea1c9ad34a89"
+    },
+    "campaigns/data/300000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "97ae081508b399e15332357055d2901a1c889fb85b6db6ec31185b7ef57c0efd"
+    },
+    "campaigns/data/300000/rustsql-3-logs/server.log": {
+      "bytes": 13707,
+      "sha256": "fa18107cb2809065b36215cacd91ad07adfef67a4e39670cd6e0d7d3eda5a4f5"
+    },
+    "campaigns/data/300000/scaling-postgresql-1.json": {
+      "bytes": 41536,
+      "sha256": "783bab5b0ae2532d0b07376130841d36272cecce3eec367ca5cfce1f98508de0"
+    },
+    "campaigns/data/300000/scaling-postgresql-2.json": {
+      "bytes": 41555,
+      "sha256": "736089249ed48bacbfd95661c4d4a282cfc314cf8397428238f2e2ea4d91809a"
+    },
+    "campaigns/data/300000/scaling-postgresql-3.json": {
+      "bytes": 41562,
+      "sha256": "dd1cc60b40acc1e834ffed642617f81ac45e1fcbbb7e2eb16dd3a3fc6b2aa8e4"
+    },
+    "campaigns/data/300000/scaling-rustsql-1.json": {
+      "bytes": 37483,
+      "sha256": "17e5a1e058fe0bcc7dcbf57225b1056dfcd016db9ea795dbdffe08235237acf7"
+    },
+    "campaigns/data/300000/scaling-rustsql-2.json": {
+      "bytes": 37504,
+      "sha256": "d27c7e325dca026723a206d2f6123c7d914effcc26752188da4dfc43c08655dc"
+    },
+    "campaigns/data/300000/scaling-rustsql-3.json": {
+      "bytes": 37505,
+      "sha256": "a53f24566de66a0b7cebf3c626ff005a36e1bdea47b8219e03091a5dd6810b93"
+    },
+    "campaigns/data/3000000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "217c75688379e614fe839b9f10d445b31b5f47f9c170805f75a17d9deee3c4f0"
+    },
+    "campaigns/data/3000000/postgresql-1-logs/server.log": {
+      "bytes": 2988,
+      "sha256": "8b8650969261cff30be9d27e649c901ed254e86b435f7f306275d8d62e231cad"
+    },
+    "campaigns/data/3000000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "ecd161c7857ea9774d0fdaf4a0234751688720926f2915e01aae66482b7cf669"
+    },
+    "campaigns/data/3000000/postgresql-2-logs/server.log": {
+      "bytes": 2988,
+      "sha256": "648dbd32858705de8d100a59a3c5c9a35e565e67b83edadf91e67993d0477e52"
+    },
+    "campaigns/data/3000000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "4e189c2258c73a094501cdd2bfb63835237c082759decbb862c51406ef46a5ea"
+    },
+    "campaigns/data/3000000/postgresql-3-logs/server.log": {
+      "bytes": 3014,
+      "sha256": "24ffef991bd7ea612b51e56b5824d8a2cc3898eefe39100026237788f6984f25"
+    },
+    "campaigns/data/3000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "6e7e7f5408e9dad04d58ad31c7f523700be9e556836a200221e817658bd85690"
+    },
+    "campaigns/data/3000000/rustsql-1-logs/server.log": {
+      "bytes": 7166,
+      "sha256": "018c63723985d6ab726d8fc5ae474400aff24e79b7e6656e3f55c7d7cf00e49c"
+    },
+    "campaigns/data/3000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "3b8fd7d431d3b47e42afcd4d6f22f97777a6dd06db86ed72a9b484b81a63d336"
+    },
+    "campaigns/data/3000000/rustsql-2-logs/server.log": {
+      "bytes": 7166,
+      "sha256": "241f752d13457d827070d897e1fbf9ddcaf93ff34e820dcbef8929f568470743"
+    },
+    "campaigns/data/3000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "c584391604decb5e0acacf24c967ee3455b7751fe04e7573e7e5d02005872dbd"
+    },
+    "campaigns/data/3000000/rustsql-3-logs/server.log": {
+      "bytes": 7189,
+      "sha256": "20fd12bb3f6032ff2b81c675749a42c2c293eaaa9e8c3593111ad0af4e41a369"
+    },
+    "campaigns/data/3000000/scaling-postgresql-1.json": {
+      "bytes": 41750,
+      "sha256": "83d16495ec343f493e587dd290bec26d4fc0739fca945b7ecc567228486871b5"
+    },
+    "campaigns/data/3000000/scaling-postgresql-2.json": {
+      "bytes": 41753,
+      "sha256": "0b62583b4146e8db5788cd85f2dcb3f016be03e947ac7bf1bf9cabe7ee353d88"
+    },
+    "campaigns/data/3000000/scaling-postgresql-3.json": {
+      "bytes": 41769,
+      "sha256": "0688c5c7c31fef449f4abc1cb93bbc6e5b8a0969c1ce698c0ad52f31699a2701"
+    },
+    "campaigns/data/3000000/scaling-rustsql-1.json": {
+      "bytes": 37525,
+      "sha256": "6863a1d95d150949d4dde1986b26f6e8a14addf25d85929adf8604bfa794b0d2"
+    },
+    "campaigns/data/3000000/scaling-rustsql-2.json": {
+      "bytes": 37542,
+      "sha256": "d88d9ac51fa09a80092f303cb27a53139e8a48335bfe86dfac3d480e775643ba"
+    },
+    "campaigns/data/3000000/scaling-rustsql-3.json": {
+      "bytes": 37542,
+      "sha256": "f21fdd5fcac4ded6318fb50c18c08c55e1be8f8de5fee0056022227e587f30da"
+    },
+    "campaigns/data/30000000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "cf8ad7f8810273c17c787aa82019b7220b657cc1d0a1f25af2d0e04567f7a0d2"
+    },
+    "campaigns/data/30000000/postgresql-1-logs/server.log": {
+      "bytes": 6560,
+      "sha256": "5a3f511a3e273e922c15bb942038f9c5ec5abe810cb35a38e15908ee1e84a8a0"
+    },
+    "campaigns/data/30000000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "fa0bce40ba17f551e9ca45cef830dd1e5f6902cb259afaee5d8a158d8982d208"
+    },
+    "campaigns/data/30000000/postgresql-2-logs/server.log": {
+      "bytes": 6560,
+      "sha256": "b64a4bb6a40b2f4bf48c7a8810779821a6989470a6af2f6b1fe1f3b198788101"
+    },
+    "campaigns/data/30000000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "18c78a885c396b75ec1bd90a172e91f8197541bd68c57a6c0422e8a849582d98"
+    },
+    "campaigns/data/30000000/postgresql-3-logs/server.log": {
+      "bytes": 6609,
+      "sha256": "3cb97149244fb272d855cd256b3619ff5aecf4984ee2da668e28fdfbbc3cc209"
+    },
+    "campaigns/data/30000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "c113dffada0608c88fa4591dfcfcb23c24f8f859f43af130c840c7468e23f4aa"
+    },
+    "campaigns/data/30000000/rustsql-1-logs/server.log": {
+      "bytes": 7170,
+      "sha256": "425f060094dc1a521a21e7a5a52a9d8f23b07bb590b5b3813bff17a12c1e6efb"
+    },
+    "campaigns/data/30000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "6b58d7861a875a816cd097105aee9e438ad699ad65c505fc6e095922b79a78f4"
+    },
+    "campaigns/data/30000000/rustsql-2-logs/server.log": {
+      "bytes": 7170,
+      "sha256": "38b745b4fada0a7faa7bad04fdcbc2abdd8d8b42bbd85c6440b479395b0e9d4d"
+    },
+    "campaigns/data/30000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "2d6fecd295222624601960517a18e7cebc2b3c251f6e4bb3bbd4f19370072556"
+    },
+    "campaigns/data/30000000/rustsql-3-logs/server.log": {
+      "bytes": 7193,
+      "sha256": "e4aa94b8ecca843b069b198b7c1f48c1f792021b9ec609b7c8b4f9c89b555adb"
+    },
+    "campaigns/data/30000000/scaling-postgresql-1.json": {
+      "bytes": 41898,
+      "sha256": "1ca7ec61b45c72269dc5a32b416348941dc192dd6a9cf02dab050d40c219882c"
+    },
+    "campaigns/data/30000000/scaling-postgresql-2.json": {
+      "bytes": 41312,
+      "sha256": "ed9b86836dee7486ee3c7ab77011d9916a13004e6cbb875cdf7e8915effdcda9"
+    },
+    "campaigns/data/30000000/scaling-postgresql-3.json": {
+      "bytes": 41320,
+      "sha256": "ca7c2e181f8d3c0590289c8d1bdb6f971b63b7e5a3c12f84122c5d1b9b678983"
+    },
+    "campaigns/data/30000000/scaling-rustsql-1.json": {
+      "bytes": 37629,
+      "sha256": "7395f03c030e349e92c1fab584b36495d3a11d7a7cd317200ae388fb113a577f"
+    },
+    "campaigns/data/30000000/scaling-rustsql-2.json": {
+      "bytes": 37629,
+      "sha256": "03f94080cf36d8a61a30d17cdd284804cef7838f3a158a6a6329ba9bad64869a"
+    },
+    "campaigns/data/30000000/scaling-rustsql-3.json": {
+      "bytes": 37641,
+      "sha256": "91662c763edc5024fcc325ebb1622305e47e4c52a283afa84e6e9317eab2a5b1"
+    },
+    "campaigns/data/300000000/postgresql-1-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "9f9ced7d5084f30b7c73555641919307986908285dd85087b49098ad9c6f37ad"
+    },
+    "campaigns/data/300000000/postgresql-1-logs/server.log": {
+      "bytes": 41732,
+      "sha256": "d0d84408265c090813ef470631017d0bd17c34f9795db04c475da977cb16f799"
+    },
+    "campaigns/data/300000000/postgresql-2-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "29c862fa7ee6b92ebce44f7b25bdc5ac80c4745404302163087eaa9a5b1903d7"
+    },
+    "campaigns/data/300000000/postgresql-2-logs/server.log": {
+      "bytes": 41735,
+      "sha256": "d779a495c715d5eee1194ad54645a6f0a90cac1d13a6da6100e7caad923d95ab"
+    },
+    "campaigns/data/300000000/postgresql-3-logs/initdb.log": {
+      "bytes": 944,
+      "sha256": "4ca6ad48ec012711ad8e989dac6d71f2f3c1c7b1b82a95b470e60474662807d4"
+    },
+    "campaigns/data/300000000/postgresql-3-logs/server.log": {
+      "bytes": 42023,
+      "sha256": "c09c40daa935f792f875baf7b0a525b95b51ce02ef028629115f239ab287e70c"
+    },
+    "campaigns/data/300000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "128e47a7431830a8d1178a757b6afe8e3012faed15dc2cf65a525d5bb7a08519"
+    },
+    "campaigns/data/300000000/rustsql-1-logs/server.log": {
+      "bytes": 7390,
+      "sha256": "be9a00e001284f51bc7be241bdb87c8e130b649ce701d4ef2b023bc01b56b605"
+    },
+    "campaigns/data/300000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2096,
+      "sha256": "3139e1fe62bdbedafadf90eeceaca27ad684054d0d2052a6ef94c5b3dda165da"
+    },
+    "campaigns/data/300000000/rustsql-2-logs/server.log": {
+      "bytes": 7537,
+      "sha256": "7def04eab5d4525e59788849ab469277c930e83c904c87aef0444c41f949be3a"
+    },
+    "campaigns/data/300000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "2a31654680f1546239af9348480c4263ca241fca01ee713223046640036ba303"
+    },
+    "campaigns/data/300000000/rustsql-3-logs/server.log": {
+      "bytes": 7493,
+      "sha256": "2360b12712b0e66fc717c173535c1ba761a80d1095a8844734941d5afb7cd6c4"
+    },
+    "campaigns/data/300000000/scaling-postgresql-1.json": {
+      "bytes": 41473,
+      "sha256": "567a863e1480a2ccd1f492c3e39e7c77e582aec3ea2108320aa385c495265619"
+    },
+    "campaigns/data/300000000/scaling-postgresql-2.json": {
+      "bytes": 41461,
+      "sha256": "abe70684dfa69fa9906c6c9e53fde3777d3cb0e448850f9eb8c60365cb176113"
+    },
+    "campaigns/data/300000000/scaling-postgresql-3.json": {
+      "bytes": 41466,
+      "sha256": "8ecd695e7991dfdfe61b0db28696743e91d05906051dfea0e72ec20d09393092"
+    },
+    "campaigns/data/300000000/scaling-rustsql-1.json": {
+      "bytes": 37734,
+      "sha256": "6a1131c41f3bc662dc4df808db4cfa0e9845b9307f8540e3336150ecbc6ac71f"
+    },
+    "campaigns/data/300000000/scaling-rustsql-2.json": {
+      "bytes": 37748,
+      "sha256": "9f4b0ecdf5acebd56c5b7915146e41453bd04e100d6a533b986e36aa99fb32e6"
+    },
+    "campaigns/data/300000000/scaling-rustsql-3.json": {
+      "bytes": 37745,
+      "sha256": "ac91d929c9b7b5fb80ec7713ad1daf9b955a8a084290011f438df04e2bb49b0f"
+    },
+    "campaigns/data/assertions-runtime-observation.json": {
+      "bytes": 409,
+      "sha256": "b9ce7a325933afb37eddbf59315fbbfd1f530af800eff63c4dacf97df82e77be"
+    },
+    "campaigns/data/metadata.json": {
+      "bytes": 3521,
+      "sha256": "faac3fa253ce13be6da53e8e23242c1672ba950f13c8659b56217b757b427ced"
+    },
+    "campaigns/data/summary.json": {
+      "bytes": 16519,
+      "sha256": "def2b55f9e1cf415601535ba21e6129373644e66520e13c4d2a6dccbe556c1d2"
+    },
+    "campaigns/pilot/1000000/postgresql-1-logs/initdb.log": {
+      "bytes": 940,
+      "sha256": "df5fc20801fd4d1b2f944db7427f02792a788af80fb19c7d64e9f7351dfe34dd"
+    },
+    "campaigns/pilot/1000000/postgresql-1-logs/server.log": {
+      "bytes": 2965,
+      "sha256": "9d5f82cdee571c1a42da29dc5119b2bd7570e752c1bb0446dd2ac1c127471964"
+    },
+    "campaigns/pilot/1000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2092,
+      "sha256": "319ebab779b8f3c0548807027cd58da5b6e3523109a042f7e06a497dea8a06c8"
+    },
+    "campaigns/pilot/1000000/rustsql-1-logs/server.log": {
+      "bytes": 7240,
+      "sha256": "95ca1f6751e53f6095a508092b5565a84e33a5d23924cf6c660a6f448d8e4ade"
+    },
+    "campaigns/pilot/1000000/scaling-postgresql-1.json": {
+      "bytes": 41621,
+      "sha256": "2263cdc8bef3496855601c6b74da9de2466c455cb09fe1148dd1425ca705952d"
+    },
+    "campaigns/pilot/1000000/scaling-rustsql-1.json": {
+      "bytes": 37503,
+      "sha256": "e4dd03fe58ff5477aa9104f252d6b7d2367bbe3ba90dfa988a7aecb0986e508a"
+    },
+    "campaigns/pilot/metadata.json": {
+      "bytes": 3329,
+      "sha256": "b68779e2edfec7072e03f2b68c4fedd76a6ae8de3c872ea6a3eb0fef1715247b"
+    },
+    "campaigns/pilot/summary.json": {
+      "bytes": 709,
+      "sha256": "448a9adf6b2c5fb318f550631dfe3b90713c5b13401992a394800aab393770a2"
+    },
+    "campaigns/rejected_harness/10000/failed-postgresql-1/initdb.log": {
+      "bytes": 938,
+      "sha256": "a458f64f9ba7de5ce8513ffbef7dc62685e1fe590e6d9d8058f49c2d564bf82e"
+    },
+    "campaigns/rejected_harness/10000/failed-postgresql-1/server.log": {
+      "bytes": 1666,
+      "sha256": "1dc2eb84351fb3c7c0870bb1e4067dcc071c79c51d1ae68c119b5c868be0255e"
+    },
+    "campaigns/rejected_harness/10000/failed-rustsql-1/initdb.log": {
+      "bytes": 2086,
+      "sha256": "c0077629b96eca1021fd1b3f31aa14f2e3c1b4b5f1d96318adc3f1f898bd46db"
+    },
+    "campaigns/rejected_harness/10000/failed-rustsql-1/server.log": {
+      "bytes": 3753,
+      "sha256": "d961e4a877d63e63e9cd995fc37cabcdb50d17310c5b65888ceea5161bfc3eaa"
+    },
+    "campaigns/rejected_harness/10000/scaling-postgresql-1.json": {
+      "bytes": 8076,
+      "sha256": "8f73efd331fba7d6c9e5ef52adb57f17762eaead096565acc656c8c0dab9c05d"
+    },
+    "campaigns/rejected_harness/10000/scaling-rustsql-1.json": {
+      "bytes": 8124,
+      "sha256": "012ecd3f518797fab18557db4d1eec06df3ef2f63c31f2a76c25c783b65e8325"
+    },
+    "campaigns/rejected_harness/metadata.json": {
+      "bytes": 3521,
+      "sha256": "0d9f032661b875891b2fa1dee16c352d9c48103482b091e23665630c28661796"
+    },
+    "campaigns/rejected_harness/summary.json": {
+      "bytes": 1333,
+      "sha256": "9e7e433a652fefceff7fb3b222067a0b1f4986edd6d8625a2870a2250c0df6ad"
+    },
+    "campaigns/restart/1000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "bacffbd006e49f566f8f61b6a7243eadd86af6dad4b87f0101ff6b39cd07d618"
+    },
+    "campaigns/restart/1000000/rustsql-1-logs/server.log": {
+      "bytes": 7340,
+      "sha256": "1669d6a415755cf8b106334b073c0c3d49e631293797c4df8dbbc7ab99e4da5e"
+    },
+    "campaigns/restart/1000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "256075e2dcb5c45a383344af92f452995d327ac3cdff97e187e140a059b87a6f"
+    },
+    "campaigns/restart/1000000/rustsql-2-logs/server.log": {
+      "bytes": 7418,
+      "sha256": "865118e3d6c686c3ac93bfd725210ebc2da5c372d1a47d21ef2aa5d9fbcb4a8e"
+    },
+    "campaigns/restart/1000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "6232777dc390b9c2e7b6da02169472b6a047ecf3ff10aa8a2544e6d2bfbb5c1c"
+    },
+    "campaigns/restart/1000000/rustsql-3-logs/server.log": {
+      "bytes": 7340,
+      "sha256": "4ade492abab36eba09528bf693574e543a487d0e38d475ccb3eeb256faee26ab"
+    },
+    "campaigns/restart/1000000/scaling-rustsql-1.json": {
+      "bytes": 66837,
+      "sha256": "fe1b3e6b05c7e21f3bc5a996ff91b938a173356efd1497e7d9335a603b42aa78"
+    },
+    "campaigns/restart/1000000/scaling-rustsql-2.json": {
+      "bytes": 66866,
+      "sha256": "13be5c466f9230698bed7faff08912f75570492bd9492484c3126e0b3e01d772"
+    },
+    "campaigns/restart/1000000/scaling-rustsql-3.json": {
+      "bytes": 66859,
+      "sha256": "d6d10cf6960fe33a087638b0eff053ec430fb385d5c56acf02c251c898517876"
+    },
+    "campaigns/restart/100000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "5ed4dd984b3377bfcfccfd16dda02ea8836e6c02d8aa938c2c77f3adae75506b"
+    },
+    "campaigns/restart/100000000/rustsql-1-logs/server.log": {
+      "bytes": 7565,
+      "sha256": "4d4bcff46aed47d8ef297b5e3ccfc30da28949939cf44a3c902ae2116e9947c1"
+    },
+    "campaigns/restart/100000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "51c000feba1e523acc5e637dcffb7d51161d14e7669edff6851f44bef577f429"
+    },
+    "campaigns/restart/100000000/rustsql-2-logs/server.log": {
+      "bytes": 7782,
+      "sha256": "18aa9b89d7722cf3ff75513a33ac867c9e10cbbf70cc7e5e72deb3570c0a3a14"
+    },
+    "campaigns/restart/100000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "03c2c2e0abbcfb6d60c154e048c12f6322f2ba852c75c5fbc1c079308521b19b"
+    },
+    "campaigns/restart/100000000/rustsql-3-logs/server.log": {
+      "bytes": 7782,
+      "sha256": "2188cd06ef610328a69cc07c460fad249f81a5541f7dd2ec38f89b55cba0c1ab"
+    },
+    "campaigns/restart/100000000/scaling-rustsql-1.json": {
+      "bytes": 67177,
+      "sha256": "e68becbda632eb5777cd828ccaee61e412b45560e167d4a7c0bb27a4a60f1fa4"
+    },
+    "campaigns/restart/100000000/scaling-rustsql-2.json": {
+      "bytes": 67194,
+      "sha256": "2df0fcce2f19b8bff416b1edc9c33c307bf72120872b31fe400b6fe6d4f79276"
+    },
+    "campaigns/restart/100000000/scaling-rustsql-3.json": {
+      "bytes": 67197,
+      "sha256": "43ab9954e2ea475e2886d6bd15238226c2a3bcec7639c98167f25e2068ca5253"
+    },
+    "campaigns/restart/300000000/rustsql-1-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "b420521086465d3d382a9ecb1cd07df1babb2ebfcec9a4f7c130d5ea020336e3"
+    },
+    "campaigns/restart/300000000/rustsql-1-logs/server.log": {
+      "bytes": 7348,
+      "sha256": "fdc2638d1cc1a68dfb4799d9cc9cfb36e5dc0987b226e85a34399cdf6659b300"
+    },
+    "campaigns/restart/300000000/rustsql-2-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "4be15b9d94b482c5184fd5b87e602192307dbd629d4a8292ee435167107392ca"
+    },
+    "campaigns/restart/300000000/rustsql-2-logs/server.log": {
+      "bytes": 7565,
+      "sha256": "8e1a3fdc16a7cd601d25fb0e818cc33598c259109780332cd5c586cbf9c6b1b9"
+    },
+    "campaigns/restart/300000000/rustsql-3-logs/initdb.log": {
+      "bytes": 2100,
+      "sha256": "286db236810cf2cb73fcc91fcd896581056a3c7a6b3bbcfd0ef133f0e07eed04"
+    },
+    "campaigns/restart/300000000/rustsql-3-logs/server.log": {
+      "bytes": 7565,
+      "sha256": "0be194179d14a2e99b424296d21410d7aaab6f7d71eafc64f4cd2f0e2c9adfe9"
+    },
+    "campaigns/restart/300000000/scaling-rustsql-1.json": {
+      "bytes": 67312,
+      "sha256": "96785d5f7d9d81793ac4d37b40848d72fd7f28dd52e53f532128edd0d78198a9"
+    },
+    "campaigns/restart/300000000/scaling-rustsql-2.json": {
+      "bytes": 67274,
+      "sha256": "7bdbdd4071828fd28ba02f58881ea6712fcd6d3c673e86f59c113bc3430b1958"
+    },
+    "campaigns/restart/300000000/scaling-rustsql-3.json": {
+      "bytes": 67277,
+      "sha256": "afce9c7b77a45db464a8f8a7f33daa466deb85e9060bf32b8369c600fc0640f7"
+    },
+    "campaigns/restart/metadata.json": {
+      "bytes": 3520,
+      "sha256": "eb25944e0e7e3909dd46f88b47f4fa90a770d6199c10846baa0b6d4a97afb135"
+    },
+    "campaigns/restart/summary.json": {
+      "bytes": 2648,
+      "sha256": "4cda74a754549791c9999ddf77b95548ab801a1aa687462c1456629835cc14b7"
+    },
+    "commands/memory-scaling-data-20261031-command.json": {
+      "bytes": 1179,
+      "sha256": "825ff08de302b7c3aec7b07d065c83ce6a2d48b407068ff81596b11a047913e3"
+    },
+    "commands/memory-scaling-data-20261031-journal.log": {
+      "bytes": 602,
+      "sha256": "1a78ebafeada65b9f305bd15a15a8dd7965884c861e85362a7852ef2581fb085"
+    },
+    "commands/memory-scaling-data-20261031.log": {
+      "bytes": 1495,
+      "sha256": "da9e15a4da376998057fb28cc99cf8b701b36a159b779199eeef3ee5f396ef63"
+    },
+    "commands/memory-scaling-pilot-20261031-command.json": {
+      "bytes": 1187,
+      "sha256": "0aae63f71a9baafaa6267e1454fca9d1a41a61550125f057dd8c29e09109cdb7"
+    },
+    "commands/memory-scaling-pilot-20261031-journal.log": {
+      "bytes": 608,
+      "sha256": "cd230d8ca71d23495a04adcd242358df263f67a34bc1182193b4b26c3733b188"
+    },
+    "commands/memory-scaling-pilot-20261031.log": {
+      "bytes": 482,
+      "sha256": "acff64da5cf8d429d8a2f99702d4303d6d474b3492ae82bc654ffb016ba4c0e1"
+    },
+    "commands/memory-scaling-restart-20261031-command.json": {
+      "bytes": 1219,
+      "sha256": "ba8a96da3ed07bf3d7f9412d824e3cdb2152bf36d60a99ab9dae0e22111657bd"
+    },
+    "commands/memory-scaling-restart-20261031-journal.log": {
+      "bytes": 632,
+      "sha256": "dc923d1ab7a4bf2f4e9e72b7ce4f865e67fa363cd20dc956521d76adb41c69cd"
+    },
+    "commands/memory-scaling-restart-20261031.log": {
+      "bytes": 1901,
+      "sha256": "66f7ea478776e9fc23516f7631ba4791d9e28a0d1d6e7e5ab989a94c76ce4f41"
+    },
+    "commands/memory-scaling-v2-connections-20261031-command.json": {
+      "bytes": 1266,
+      "sha256": "842f1fc31d34ffa059f4e84874fd1ab9bc803e5ff6db62810dbc077d35ad68b5"
+    },
+    "commands/memory-scaling-v2-connections-20261031-journal.log": {
+      "bytes": 672,
+      "sha256": "401fecaf17655dd6dd0a20d498a2f62c5b6dd5c676b5495d99b7072c32915ead"
+    },
+    "commands/memory-scaling-v2-connections-20261031.log": {
+      "bytes": 11939,
+      "sha256": "956faead767e332653332593787c994b30a0738b6868529b413c600b9a4328ef"
+    },
+    "commands/memory-scaling-v2-data-20261031-command.json": {
+      "bytes": 1218,
+      "sha256": "e737f002d34285917ab9665e74bdb500f8b2150e0895896c44ef18a2a8db373a"
+    },
+    "commands/memory-scaling-v2-data-20261031-journal.log": {
+      "bytes": 629,
+      "sha256": "5e5c70f4f4743ff6963629edb21717d51fef5f6dd9114c717aecc80d51aff683"
+    },
+    "commands/memory-scaling-v2-data-20261031.log": {
+      "bytes": 12362,
+      "sha256": "880cbe90adb3e99ce1e50b128651d3e0fc5f92fac4e21bcd4b0fa1bde1c79f81"
+    },
+    "hardware/windows-inventory.json": {
+      "bytes": 229,
+      "sha256": "2edc80fd0f54e9e448edd77803095138d97c2b8323a6ff1b155697b5b098b9f7"
+    },
+    "hardware/windows.json": {
+      "bytes": 304,
+      "sha256": "2027098b698dc94c10b22cd1b522f80e7102c202590424b1728e3f4ef315fda3"
+    },
+    "sources/connections/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "sources/connections/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "sources/connections/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "sources/connections/fixed_workload.py": {
+      "bytes": 12663,
+      "sha256": "7fa33919a1167ac682581b8988172c7a2b00653e9315888d0e687601e0b249cc"
+    },
+    "sources/connections/linux-hardware.json": {
+      "bytes": 588,
+      "sha256": "f2229b2213952a8630b349fd8c867cea246e4e3123a29ef9b9511b85d39d7bb8"
+    },
+    "sources/connections/memory_scaling_driver.py": {
+      "bytes": 6132,
+      "sha256": "c5809c0566fc63c326efc99f0a29566c50141abbe413c7685fb486ea364e9f66"
+    },
+    "sources/connections/postgres_comparison.py": {
+      "bytes": 9323,
+      "sha256": "db0e15a0b52f6566a53cd725c05dc5f557575b3d0957189bd1a8f00a3df10702"
+    },
+    "sources/connections/resource_scope.py": {
+      "bytes": 7374,
+      "sha256": "34070e29d841523fa4846d5b7af2a9a6a62130e1db8d7e584349bdda74b5ed19"
+    },
+    "sources/data/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "sources/data/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "sources/data/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "sources/data/fixed_workload.py": {
+      "bytes": 11696,
+      "sha256": "604236dede55a3a5fdc615dfb8576a4fffa281736c5e43aa90dc89ab2b153ed6"
+    },
+    "sources/data/linux-hardware.json": {
+      "bytes": 588,
+      "sha256": "f2229b2213952a8630b349fd8c867cea246e4e3123a29ef9b9511b85d39d7bb8"
+    },
+    "sources/data/memory_scaling_driver.py": {
+      "bytes": 5988,
+      "sha256": "8ebba8eccdd1ff56075b7fd01ac84af40cd7595ae6103e8f92e35b63b821c00d"
+    },
+    "sources/data/postgres_comparison.py": {
+      "bytes": 9250,
+      "sha256": "183ed3b6d4889d4cad9165f877dfff3fc662fec4d60cd51d9f2699d288bf44cb"
+    },
+    "sources/data/resource_scope.py": {
+      "bytes": 7374,
+      "sha256": "a019a6c5913587d8b367f9c6eb48e0059bb18a4cf4c2beeed77f2d3e1fce0a73"
+    },
+    "sources/pilot/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "sources/pilot/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "sources/pilot/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "sources/pilot/fixed_workload.py": {
+      "bytes": 11590,
+      "sha256": "0e401051e3d03cae5723b83b3460c0081f96ba598fb101280288598295359f1d"
+    },
+    "sources/pilot/memory_scaling_driver.py": {
+      "bytes": 5797,
+      "sha256": "4dd8c952c253d8f016c36cc87f0db375edb3ab58c52f9a4fe9c4423cc0ee83f2"
+    },
+    "sources/pilot/postgres_comparison.py": {
+      "bytes": 9264,
+      "sha256": "129aded57c47afbaaebb9495d71e438019b7648f34fcf17a292dec007aafed72"
+    },
+    "sources/pilot/resource_scope.py": {
+      "bytes": 7374,
+      "sha256": "a019a6c5913587d8b367f9c6eb48e0059bb18a4cf4c2beeed77f2d3e1fce0a73"
+    },
+    "sources/rejected_harness/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "sources/rejected_harness/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "sources/rejected_harness/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "sources/rejected_harness/fixed_workload.py": {
+      "bytes": 11678,
+      "sha256": "237e12d4e1e6c137a4075c29279ebb1de6addf05413503c24deb9c2e4ab19f7b"
+    },
+    "sources/rejected_harness/memory_scaling_driver.py": {
+      "bytes": 5988,
+      "sha256": "8ebba8eccdd1ff56075b7fd01ac84af40cd7595ae6103e8f92e35b63b821c00d"
+    },
+    "sources/rejected_harness/postgres_comparison.py": {
+      "bytes": 9250,
+      "sha256": "183ed3b6d4889d4cad9165f877dfff3fc662fec4d60cd51d9f2699d288bf44cb"
+    },
+    "sources/rejected_harness/resource_scope.py": {
+      "bytes": 7374,
+      "sha256": "a019a6c5913587d8b367f9c6eb48e0059bb18a4cf4c2beeed77f2d3e1fce0a73"
+    },
+    "sources/restart/cluster.py": {
+      "bytes": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    "sources/restart/connection_churn_probe.py": {
+      "bytes": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    "sources/restart/connection_queue_probe.py": {
+      "bytes": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    "sources/restart/fixed_workload.py": {
+      "bytes": 13658,
+      "sha256": "698fff5ebea363b641ce9e50afef0e342728a703adab220acde665b055cfb66d"
+    },
+    "sources/restart/linux-hardware.json": {
+      "bytes": 588,
+      "sha256": "f2229b2213952a8630b349fd8c867cea246e4e3123a29ef9b9511b85d39d7bb8"
+    },
+    "sources/restart/memory_scaling_driver.py": {
+      "bytes": 6024,
+      "sha256": "6250da9d79821138bbe628d4d459340cd589e2b998f54c163e928624a884a01a"
+    },
+    "sources/restart/postgres_comparison.py": {
+      "bytes": 10942,
+      "sha256": "48bfe611e3b44ee5163347e6bb3e1a931aa95d6cf7470c173fbf57d3c5f33709"
+    },
+    "sources/restart/resource_scope.py": {
+      "bytes": 7374,
+      "sha256": "54b4ae35dbef58c44f2427b392cfde63647144c7df05f5c7ab081b5c9b620866"
+    },
+    "wrappers/run_connection_scaling.py": {
+      "bytes": 1461,
+      "sha256": "31b1e1033b079e8b20fd7d104cdf3771c6f1556100c9fe4f5467c6a99ac1979e"
+    },
+    "wrappers/run_memory_scaling.py": {
+      "bytes": 1446,
+      "sha256": "c68a2d22f79f7caab26c92793b74b60f2cce1da30af44d690e30c5999b8b7b30"
+    },
+    "wrappers/run_memory_scaling_v2.py": {
+      "bytes": 1452,
+      "sha256": "4c42246d1298140db3b32cb089fb81e24fa6d586ac1e2c818df0d93a51fd7655"
+    },
+    "wrappers/run_restart_scaling.py": {
+      "bytes": 1448,
+      "sha256": "7925a6d6fe0e3845ab708e37d7d22c05bc485e89be03a3ab53f7ddc3db526ffb"
+    }
+  },
+  "campaigns": [
+    {
+      "kind": "data",
+      "source_label": "memory-scaling-v2-data-20261031",
+      "prefix": "campaigns/data",
+      "source_prefix": "sources/data",
+      "command": "commands/memory-scaling-v2-data-20261031-command.json"
+    },
+    {
+      "kind": "connections",
+      "source_label": "memory-scaling-v2-connections-20261031",
+      "prefix": "campaigns/connections",
+      "source_prefix": "sources/connections",
+      "command": "commands/memory-scaling-v2-connections-20261031-command.json"
+    },
+    {
+      "kind": "restart",
+      "source_label": "memory-scaling-restart-20261031",
+      "prefix": "campaigns/restart",
+      "source_prefix": "sources/restart",
+      "command": "commands/memory-scaling-restart-20261031-command.json"
+    },
+    {
+      "kind": "pilot",
+      "source_label": "memory-scaling-pilot-20261031",
+      "prefix": "campaigns/pilot",
+      "source_prefix": "sources/pilot",
+      "command": "commands/memory-scaling-pilot-20261031-command.json"
+    },
+    {
+      "kind": "rejected_harness",
+      "source_label": "memory-scaling-data-20261031",
+      "prefix": "campaigns/rejected_harness",
+      "source_prefix": "sources/rejected_harness",
+      "command": "commands/memory-scaling-data-20261031-command.json"
+    }
+  ],
+  "outer_sha256": {
+    "results.json": "bf1c17dce688119eda06c21a76fab0ea0f74f08e164070649063b8a2a6fa9615",
+    "README.md": "48f127ea58b3b01fa03eaba14d7ff87f2963ca4597ca9988d87808f95607b162",
+    "memory-scaling.png": "a873cc21da0ee87c0987e370ef56c25509275d78fe58261cf3f795d3013d7e6d",
+    "memory-scaling.svg": "68971293da8b4aa518c7bdb0307d79e3c51f51b5e1f5ca7a87713de29cd2de23",
+    "replay.py": "0095fc45d2cc96ee956a3c7220f819c78587e3f95f2a0d5cfc0855d9fee3d5ca"
+  }
+}

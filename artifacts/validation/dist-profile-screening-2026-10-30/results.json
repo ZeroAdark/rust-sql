@@ -1,0 +1,227 @@
+{
+  "dist-profile-medium-20261030": {
+    "timed_performance_valid": true,
+    "invalid_timed_trials": {},
+    "timed": {
+      "phase": "medium",
+      "trials": 15,
+      "engines": {
+        "postgresql": {
+          "cpu_ms_per_bundle": 241.65311666666668,
+          "sql_per_second": 178.69583797233128,
+          "charged_peak_mib": 223.8203125,
+          "pss_peak_mib": 95.9287109375,
+          "read_p99_ms": 0.481909,
+          "update_p99_ms": 1.351752,
+          "aggregate_p99_ms": 37.228337,
+          "range_p99_ms": 16.324114,
+          "join_p99_ms": 54.296223,
+          "bundle_p99_ms": 109.767381
+        },
+        "rustsql-baseline": {
+          "cpu_ms_per_bundle": 19.94483888888889,
+          "sql_per_second": 179.37525380578938,
+          "charged_peak_mib": 483.99609375,
+          "pss_peak_mib": 510.6220703125,
+          "read_p99_ms": 0.657798,
+          "update_p99_ms": 1.513206,
+          "aggregate_p99_ms": 5.786858,
+          "range_p99_ms": 1.52457,
+          "join_p99_ms": 7.881645,
+          "bundle_p99_ms": 21.001603
+        },
+        "rustsql": {
+          "cpu_ms_per_bundle": 19.579066666666666,
+          "sql_per_second": 179.3971961602746,
+          "charged_peak_mib": 487.1171875,
+          "pss_peak_mib": 511.6787109375,
+          "read_p99_ms": 0.621046,
+          "update_p99_ms": 1.427391,
+          "aggregate_p99_ms": 6.043602,
+          "range_p99_ms": 1.395622,
+          "join_p99_ms": 7.428386,
+          "bundle_p99_ms": 21.23473
+        }
+      },
+      "candidate_change_percent": {
+        "cpu_ms_per_bundle": -1.8339191620444284,
+        "sql_per_second": 0.012232654181487668,
+        "charged_peak_mib": 0.6448592850859081,
+        "pss_peak_mib": 0.20693203181627595,
+        "read_p99_ms": -5.587125530938075,
+        "update_p99_ms": -5.671071883140821,
+        "aggregate_p99_ms": 4.436673580032546,
+        "range_p99_ms": -8.457991433650147,
+        "join_p99_ms": -5.750817246907214,
+        "bundle_p99_ms": 1.1100438380822641
+      },
+      "preservation_failures": []
+    },
+    "warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        4768425,
+        4878029,
+        4559035,
+        4824821,
+        4837840
+      ],
+      "candidate_cpu_us": [
+        4690214,
+        4731192,
+        5019866,
+        4754460,
+        4744307
+      ],
+      "median_change_pct": -1.668745845700803,
+      "paired_change_pct": [
+        -1.640185176447151,
+        -3.01017070624221,
+        10.108082083160141,
+        -1.458313168509262,
+        -1.9333628230780664
+      ],
+      "throttled_trials": [],
+      "rust_comparison_valid": true
+    },
+    "setup_warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        5411021,
+        5530417,
+        5204268,
+        5478122,
+        5537525
+      ],
+      "candidate_cpu_us": [
+        5348146,
+        5369799,
+        5625058,
+        5409163,
+        5375924
+      ],
+      "median_change_pct": -1.865566338245117,
+      "paired_change_pct": [
+        -1.1619803360585768,
+        -2.904265627709446,
+        8.085479072176916,
+        -1.2588073065915695,
+        -2.9182893079489514
+      ],
+      "throttled_trials": [],
+      "rust_comparison_valid": true
+    }
+  },
+  "dist-profile-capacity-20261030": {
+    "timed_performance_valid": true,
+    "invalid_timed_trials": {},
+    "timed": {
+      "phase": "capacity",
+      "trials": 15,
+      "engines": {
+        "postgresql": {
+          "cpu_ms_per_bundle": 234.75245666666666,
+          "sql_per_second": 296.85440592658404,
+          "charged_peak_mib": 232.60546875,
+          "pss_peak_mib": 100.7041015625,
+          "read_p99_ms": 6.298904,
+          "update_p99_ms": 10.070584,
+          "aggregate_p99_ms": 253.103465,
+          "range_p99_ms": 108.224687,
+          "join_p99_ms": 408.424252,
+          "bundle_p99_ms": 703.510858
+        },
+        "rustsql-baseline": {
+          "cpu_ms_per_bundle": 19.09597,
+          "sql_per_second": 3364.3583164046004,
+          "charged_peak_mib": 489.11328125,
+          "pss_peak_mib": 516.5869140625,
+          "read_p99_ms": 4.863649,
+          "update_p99_ms": 7.797643,
+          "aggregate_p99_ms": 14.949626,
+          "range_p99_ms": 6.862927,
+          "join_p99_ms": 19.742113,
+          "bundle_p99_ms": 49.982006
+        },
+        "rustsql": {
+          "cpu_ms_per_bundle": 19.079516666666667,
+          "sql_per_second": 3330.663819915967,
+          "charged_peak_mib": 477.89453125,
+          "pss_peak_mib": 501.96875,
+          "read_p99_ms": 5.031008,
+          "update_p99_ms": 8.210436,
+          "aggregate_p99_ms": 15.892011,
+          "range_p99_ms": 6.865476,
+          "join_p99_ms": 19.585605,
+          "bundle_p99_ms": 50.957999
+        }
+      },
+      "candidate_change_percent": {
+        "cpu_ms_per_bundle": -0.0861612860375005,
+        "sql_per_second": -1.0015133145699462,
+        "charged_peak_mib": -2.293691549599486,
+        "pss_peak_mib": -2.829758877850974,
+        "read_p99_ms": 3.4410172280113116,
+        "update_p99_ms": 5.293817631815156,
+        "aggregate_p99_ms": 6.303736294138718,
+        "range_p99_ms": 0.03714158696428438,
+        "join_p99_ms": -0.7927621526631845,
+        "bundle_p99_ms": 1.952688733621466
+      },
+      "preservation_failures": [
+        "update_p99_ms",
+        "aggregate_p99_ms"
+      ]
+    },
+    "warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        6663129,
+        7117781,
+        5989192,
+        6899153,
+        7157760
+      ],
+      "candidate_cpu_us": [
+        7098022,
+        6866369,
+        7329130,
+        6839198,
+        6980814
+      ],
+      "median_change_pct": 1.1836380494823162,
+      "paired_change_pct": [
+        6.52685847745107,
+        -3.5321682417596145,
+        22.372600511053918,
+        -0.8690197187973703,
+        -2.472086239270388
+      ],
+      "throttled_trials": [],
+      "rust_comparison_valid": true
+    },
+    "setup_warmup_and_measurement_cpu": {
+      "baseline_cpu_us": [
+        7295116,
+        7779104,
+        6587687,
+        7544468,
+        7850805
+      ],
+      "candidate_cpu_us": [
+        7739027,
+        7516916,
+        7915225,
+        7461468,
+        7664847
+      ],
+      "median_change_pct": 1.5955929563224336,
+      "paired_change_pct": [
+        6.085043747076813,
+        -3.3704138677153606,
+        20.15180745533296,
+        -1.1001438404934616,
+        -2.3686488200891476
+      ],
+      "throttled_trials": [],
+      "rust_comparison_valid": true
+    }
+  }
+}
