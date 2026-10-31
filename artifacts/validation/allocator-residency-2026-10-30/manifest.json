@@ -1,0 +1,626 @@
+{
+  "schema_version": 1,
+  "archive_sha256": "f17bdf3c5051af2b67768634dd079ab6230d419cbdaf04da63f6fd73a7f4c456",
+  "files": [
+    {
+      "path": "build/candidate.patch",
+      "size": 8999,
+      "sha256": "6322cf0481b0e07539b7f904f57a8035840e40626ed508fcd2ed0e1532309450"
+    },
+    {
+      "path": "build/negative-control.log",
+      "size": 10848,
+      "sha256": "45e8c1ceca8c4bf8e1e60953c22ab99d5b2a139190c164d4d0dbb92e55b20165"
+    },
+    {
+      "path": "build/negative-control.patch",
+      "size": 9008,
+      "sha256": "ecfd284013a8c08994790944f457f67e15c6ed6688fc4103643d6be4a2be1f4c"
+    },
+    {
+      "path": "build/reclaim-path-equivalence.json",
+      "size": 195,
+      "sha256": "1f2db69af5c3b489c4e0dcc81d2d7a52eee8104d017ccf095248188915990299"
+    },
+    {
+      "path": "build/release-build.log",
+      "size": 149572,
+      "sha256": "4eccd30e5ecb2e2a881bf5454cf51569a807c69fc4c86ccb624e45e289f94c8b"
+    },
+    {
+      "path": "build/report.json",
+      "size": 1684,
+      "sha256": "84ab0fc0d5515754eb26dda3e5a302e008df86a2e6f2b47ab23ee9bdf676de69"
+    },
+    {
+      "path": "build/restored-focused.log",
+      "size": 10296,
+      "sha256": "b0f4de2ede74068628d22569a729e021744765ca23b80110568b8d506830a31e"
+    },
+    {
+      "path": "build/share-repair.json",
+      "size": 89015,
+      "sha256": "ce77653319bf61bb9d754376002d983d767521c275a69b52e04c7636339f1934"
+    },
+    {
+      "path": "build/unit.log",
+      "size": 20116,
+      "sha256": "157b28e6893f18da9d4c995c74c5485e13278a81a5d801e3b2d1e23b30aead96"
+    },
+    {
+      "path": "clusters/compat-3zh5jcw6/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-3zh5jcw6/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-3zh5jcw6/initdb.log",
+      "size": 2250,
+      "sha256": "4f7ffe0073c0164560ae8be4875bf460c30324a33c8f0773d9268f32f15d8739"
+    },
+    {
+      "path": "clusters/compat-3zh5jcw6/server.log",
+      "size": 6609,
+      "sha256": "4886393684e08e7956303df85e8b4f5fe9ccfda646dd0e200655b86595eada43"
+    },
+    {
+      "path": "clusters/compat-4xgml6w_/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-4xgml6w_/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-4xgml6w_/initdb.log",
+      "size": 2241,
+      "sha256": "b63f3329385df4e227b04aa3891c2960ad75ee2614e6a2118e57cbab7640beca"
+    },
+    {
+      "path": "clusters/compat-4xgml6w_/server.log",
+      "size": 12402,
+      "sha256": "2ef656ed8803f50ea2b7ed01a1039f7c7d53de75200b91c729053c90091b8963"
+    },
+    {
+      "path": "clusters/compat-7s_ewg_e/initdb.log",
+      "size": 219,
+      "sha256": "4cb7842ead03b5bc3dc372038aa3ddeab9a14b950f436989f8c295f636c6a2af"
+    },
+    {
+      "path": "clusters/compat-ency4h_9/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-ency4h_9/data/postgresql.conf",
+      "size": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    {
+      "path": "clusters/compat-ency4h_9/initdb.log",
+      "size": 886,
+      "sha256": "ebed471d3487e78c68b2085d761d443f320874b451ebbe9b559f658e5f1a343b"
+    },
+    {
+      "path": "clusters/compat-ency4h_9/server.log",
+      "size": 4746,
+      "sha256": "c5bcf8631665f2d19e07171fa08a79342e848fe929f23129db9a5873720a825c"
+    },
+    {
+      "path": "clusters/compat-ji4aewsn/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-ji4aewsn/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-ji4aewsn/initdb.log",
+      "size": 2248,
+      "sha256": "264a21639cf3acb0673bd6050c4dac13d425439319bb4d69a440eca1ecf8ec56"
+    },
+    {
+      "path": "clusters/compat-ji4aewsn/server.log",
+      "size": 11162,
+      "sha256": "46e6668468fa677cbfa44403dcff6d08dd088fb96f6013c28899c47e5b8448cd"
+    },
+    {
+      "path": "clusters/compat-lb606dxs/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-lb606dxs/data/postgresql.conf",
+      "size": 32669,
+      "sha256": "13f00cc9b0271eca8be2f5454121651928515ea64d0095d6e697b55222a9e5e9"
+    },
+    {
+      "path": "clusters/compat-lb606dxs/initdb.log",
+      "size": 886,
+      "sha256": "9e3b4940eb80250a2fe8173521fa44486ca8dd55806bdf4a4b312c611deb4138"
+    },
+    {
+      "path": "clusters/compat-lb606dxs/server.log",
+      "size": 11475,
+      "sha256": "e9ce686db7c4029ee7247bb380a958323382ace5b02b996ec3803f4c7fab4939"
+    },
+    {
+      "path": "clusters/compat-mk5f445l/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-mk5f445l/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-mk5f445l/initdb.log",
+      "size": 2245,
+      "sha256": "5f1b79801a2033c6643f30cbacb30a6de70ad408a012534965972854f6f46b14"
+    },
+    {
+      "path": "clusters/compat-mk5f445l/server.log",
+      "size": 14345,
+      "sha256": "6f7c690b6666cc3df48fa538061335037b20187c2724ec67ddb2958e76c374e7"
+    },
+    {
+      "path": "clusters/compat-pg5a53t9/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-pg5a53t9/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-pg5a53t9/initdb.log",
+      "size": 2248,
+      "sha256": "ba4e17b4e1228ccd3fc5290382e19895129cb877cd1471953a081e2ffd8e8d68"
+    },
+    {
+      "path": "clusters/compat-pg5a53t9/server.log",
+      "size": 13580,
+      "sha256": "bd5ea573e3a7e7974c815f6a900e51910bee7d121ac2de63f60e0bbb3b8779f3"
+    },
+    {
+      "path": "clusters/compat-t35f10ov/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-t35f10ov/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-t35f10ov/initdb.log",
+      "size": 2245,
+      "sha256": "553aab4ddf1e69d0ef8898fcdc6762770c2a707d584130ad377adf54533c04bb"
+    },
+    {
+      "path": "clusters/compat-t35f10ov/server.log",
+      "size": 12081,
+      "sha256": "50eed0ce19326fae06de31e0518ea30344bd182d09bff5f0df95d1db04bcc162"
+    },
+    {
+      "path": "clusters/compat-uzdf9xrh/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-uzdf9xrh/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-uzdf9xrh/initdb.log",
+      "size": 2244,
+      "sha256": "275a8922a4b21668360de941dccd8ced23abbbf7aaf91cc1fb6497e8086d2ed8"
+    },
+    {
+      "path": "clusters/compat-uzdf9xrh/server.log",
+      "size": 13046,
+      "sha256": "2e6d0c931e38b13d9ab966b19c5de36a580ea0e11309ed7e835bc1d163e2ee77"
+    },
+    {
+      "path": "clusters/compat-zsfk5e6i/data/pg_hba.conf",
+      "size": 5721,
+      "sha256": "e6305f548fd8096217d02a8f93b5c50716d58df1d2441b12346dfe57db7027fd"
+    },
+    {
+      "path": "clusters/compat-zsfk5e6i/data/postgresql.conf",
+      "size": 34340,
+      "sha256": "f3177168b1f09668f3a682d91bd55ad95a6ac0a4b9de6aea908cc0b0cb159b32"
+    },
+    {
+      "path": "clusters/compat-zsfk5e6i/initdb.log",
+      "size": 2244,
+      "sha256": "8e8db31d3560d6e6c5c9bc10339d96454ef2bb08d74d6f8d39a029c0dafe56bd"
+    },
+    {
+      "path": "clusters/compat-zsfk5e6i/server.log",
+      "size": 13943,
+      "sha256": "5126fb3e14fbd8bd0fb77ad4e1610609e247b112b3f42ee0c9326b02c7c88dac"
+    },
+    {
+      "path": "runs/accounting.log",
+      "size": 250,
+      "sha256": "55f1738528b00b35193796a0df499d0f99e74e31af4e62cf2bc73f8790e0ed53"
+    },
+    {
+      "path": "runs/checks.json",
+      "size": 4799,
+      "sha256": "8fbb1a5eff026b9e79d12c9078ecb0275e6cf82a8d9e78ba4f036fa346ea3ad2"
+    },
+    {
+      "path": "runs/initial-accounting.log",
+      "size": 1112,
+      "sha256": "3ea400cfda057fc42b0f58057b9d384269ddc40fa384ab5d59325b53647581ac"
+    },
+    {
+      "path": "runs/initial-checks.json",
+      "size": 1868,
+      "sha256": "d589620aa62c851bd46659548687c7ccd449e5a02e8ddf77e3e3359f73510428"
+    },
+    {
+      "path": "runs/initial-live.json",
+      "size": 175363,
+      "sha256": "bf2e5afcc9b61665110854b1b0e88f3495f22afab6e2cdc51b5f0bcb66815ce3"
+    },
+    {
+      "path": "runs/live.json",
+      "size": 341213,
+      "sha256": "7939dacf620812d51230a1f66e07c5eeba8cbd1afd7d83f111371210e8266753"
+    },
+    {
+      "path": "runs/protocol.json",
+      "size": 2068,
+      "sha256": "55154f09fa0d38a9660e81a00a6db3faa1581c64e18eb2688c92b0b87210a2ab"
+    },
+    {
+      "path": "runs/protocol.log",
+      "size": 2068,
+      "sha256": "55154f09fa0d38a9660e81a00a6db3faa1581c64e18eb2688c92b0b87210a2ab"
+    },
+    {
+      "path": "runs/spill.json",
+      "size": 77295,
+      "sha256": "c1773fc565e847f8aebf763d906ddf619a7022fefa3bc2af5066194fa09aba12"
+    },
+    {
+      "path": "runs/spill.log",
+      "size": 1141,
+      "sha256": "50353924a1f7381be790fbb7ca1761b841377e0c54b2e3e2b8b239329bde0c10"
+    },
+    {
+      "path": "source/admission_probe.py",
+      "size": 20737,
+      "sha256": "1ed2ef485ce12afd2286840caa8cb43f7e066a68881bcbb1349f0fab0fe11ac9"
+    },
+    {
+      "path": "source/aggregate_strategy.py",
+      "size": 5225,
+      "sha256": "2d43b17a0c0f1f97691790b7e027257d87b98a320716f6c5233aaffe69ddad2e"
+    },
+    {
+      "path": "source/aggregate_strategy_probe.py",
+      "size": 6918,
+      "sha256": "05892a20065df429b9e6483276caa1cc520cffeac8b749016a534936d62e409f"
+    },
+    {
+      "path": "source/aggregate_validity_probe.py",
+      "size": 5756,
+      "sha256": "7ca5bade0907cedc097968a05e5a176cc51602745e6fe7392a979f12a6600e29"
+    },
+    {
+      "path": "source/allocator_residency_probe.py",
+      "size": 8316,
+      "sha256": "56de32688df468e39a77923e940e1f5b8dafd9162e8dd23e3939ad1aa58caa56"
+    },
+    {
+      "path": "source/audit_regress.py",
+      "size": 2496,
+      "sha256": "472a5182409a8a4958c2fb0068f1d7f5da0bc31da25a50a00b4387fabe03b17a"
+    },
+    {
+      "path": "source/auth_tls_probe.py",
+      "size": 14122,
+      "sha256": "06443b2675357be7e5e998a030034c415d546f41e67cc8dd3385558a843d2c7d"
+    },
+    {
+      "path": "source/bind_lifecycle_probe.py",
+      "size": 7007,
+      "sha256": "4fb5ba34f15e85060ae9125cf6464ac70f023c142332f15646c5b5e0dc51bfc1"
+    },
+    {
+      "path": "source/catalog_churn_probe.py",
+      "size": 4859,
+      "sha256": "9019984861cff3f8f5b11607c22b01bd10e36d074881c107627a69c8caa5f7d2"
+    },
+    {
+      "path": "source/choice_contract.py",
+      "size": 5299,
+      "sha256": "0eb9aac7a86fa5dee7a3ea40ec4d759d46aac7912b316c5e29dbdba22d2c672c"
+    },
+    {
+      "path": "source/choice_witness.py",
+      "size": 7997,
+      "sha256": "d3eefc1e0b9ccc036816ae07f466f6d8a97c9a3e254da37fe9a4f1f6a827b416"
+    },
+    {
+      "path": "source/cluster.py",
+      "size": 4844,
+      "sha256": "80feae6c0a79e36a8a8b5e13cb6b0c1649fe633c5591533c161377f375f8dde2"
+    },
+    {
+      "path": "source/compare_mixed.py",
+      "size": 2229,
+      "sha256": "711d91bbfda0406ac72802d63fb4d0ab398724820770db5ea8b6248912d74999"
+    },
+    {
+      "path": "source/compare_regression.py",
+      "size": 10916,
+      "sha256": "f7b8a513fd6d7a203c4be3dac9697713b9017f6032f3c8f602c345a12986df0e"
+    },
+    {
+      "path": "source/compare_resource.py",
+      "size": 13694,
+      "sha256": "228660e78454a206ff8743a2011dff777209836fd1de31ed59f649eb529acb99"
+    },
+    {
+      "path": "source/compatibility_probe.py",
+      "size": 8749,
+      "sha256": "a4250f10237fbee4bfc50e5d8e6972958f96008733a07fcfc8067f5c233ec893"
+    },
+    {
+      "path": "source/connection_churn_probe.py",
+      "size": 13767,
+      "sha256": "d79ae4c5a0be111302fc807bfd514e52ece2c78ea371f9a30261e25cfa25899a"
+    },
+    {
+      "path": "source/connection_queue_probe.py",
+      "size": 19392,
+      "sha256": "342cca13cac40ba65aaa86f470da6ba4422869027e816432eec850c7253ec294"
+    },
+    {
+      "path": "source/diagnostic_policy.py",
+      "size": 7550,
+      "sha256": "d2d2a1f2fc5ce55af0772b5bbfdea813acf9ad1fbb58d6c4a21af89527ddd8f2"
+    },
+    {
+      "path": "source/diagnostics_probe.py",
+      "size": 8240,
+      "sha256": "1b7e86a8d3177aba8e94f59c198d4231acfdbde2afb2fd044f1a059daae872a0"
+    },
+    {
+      "path": "source/engine_regression_audit.py",
+      "size": 6472,
+      "sha256": "b842d804002f88d8cc0ecf069fd8745441604b3b48a0bf49a05123934239e2b0"
+    },
+    {
+      "path": "source/engine_regression_profile.py",
+      "size": 7229,
+      "sha256": "68486c6f9138710ddd893c6e0712b033798ebd679fc49be7063781fb9aef4db6"
+    },
+    {
+      "path": "source/explain_contract.py",
+      "size": 6261,
+      "sha256": "ba915fac62aea431fd08c84ebf450e891f690b1cf7b862f63d97ab3c2cc0bdb1"
+    },
+    {
+      "path": "source/explain_cpu.py",
+      "size": 3848,
+      "sha256": "a8eb0c6a8ffdec51223f7e3e1e9821a3393fd4be1117c066ea60e99d082c6ce5"
+    },
+    {
+      "path": "source/filtered_diagnostics_probe.py",
+      "size": 15001,
+      "sha256": "9b7b2106bc2a9fd991ec58217e2334ca2dde7a21924b59d2d7df60def8270e7e"
+    },
+    {
+      "path": "source/fixed_workload.py",
+      "size": 11006,
+      "sha256": "8c5faff35e6668a79f1d6e681d8f48c395e1dd76bb8835191371792581eb2627"
+    },
+    {
+      "path": "source/grouping_contract.py",
+      "size": 6817,
+      "sha256": "72596caaa2f803986447a051888b506ff0b06239cbdcce2f99729baefb312100"
+    },
+    {
+      "path": "source/hash_diagnostics_probe.py",
+      "size": 6151,
+      "sha256": "f128239d5c370c3710690a9e58acce40e604f67c10a976711fc0d85e52b2c853"
+    },
+    {
+      "path": "source/idle_allocator_probe.py",
+      "size": 6792,
+      "sha256": "2dd62e842b24b77473ddfb999c9b2a0db6cae40faeb97844622196b21f635227"
+    },
+    {
+      "path": "source/memory-broker-views.sql",
+      "size": 15100,
+      "sha256": "456863b70c824b6126112db7e6240ccd6b3824d021282e291ff0d96544ed40f3"
+    },
+    {
+      "path": "source/merge_contract_probe.py",
+      "size": 9289,
+      "sha256": "4a03deca2f2ec85bbe906bd5469f8b9746baadd86cf5fe72e348704ce89090b3"
+    },
+    {
+      "path": "source/merge_trace.py",
+      "size": 5197,
+      "sha256": "7b7a2d8d1c2fdea1ef4b38ea7c2e5e81bc4b83cb5b03b8c501fe4f9cda8b2455"
+    },
+    {
+      "path": "source/mixed_workload.py",
+      "size": 6309,
+      "sha256": "4b4fb9a4078a10d6448a7695b21dc29e0cc673441f4dac1d69fe6181f2a0333b"
+    },
+    {
+      "path": "source/parallel_contract_probe.py",
+      "size": 9864,
+      "sha256": "5ae1021439b197f442cd947c688d9f4154601a5108b8a838393a53b82ed0400c"
+    },
+    {
+      "path": "source/postgres_comparison.py",
+      "size": 7774,
+      "sha256": "dc9189197a89eeaa80ddd2cc2cf8ab61d78caa54e735f5c90196dd41e76ccd30"
+    },
+    {
+      "path": "source/recovery_probe.py",
+      "size": 7955,
+      "sha256": "452e5e55028721688e036a8484580680b5565000548e281d136d2dba46cd22eb"
+    },
+    {
+      "path": "source/reference_regression.py",
+      "size": 2573,
+      "sha256": "df092b486c61bc2fb533384172bdaff5606fb3046b11c9a8f272ebf4f48e0e49"
+    },
+    {
+      "path": "source/regression_capture.py",
+      "size": 1700,
+      "sha256": "4355c88f8f7d08cb75860104b9bb155685533a2e227ac318968d2592a3a32a85"
+    },
+    {
+      "path": "source/resource_scope.py",
+      "size": 6553,
+      "sha256": "a80e920152a6f49b24d425b3e62b781b32cd7bae44fbd483da73cbbc97137d9e"
+    },
+    {
+      "path": "source/resource_scope_probe.py",
+      "size": 3280,
+      "sha256": "f41658722ca732bbc691f901a90500dbf366871a0aa7b4b6b0f0862ac5734b4e"
+    },
+    {
+      "path": "source/resource_workload.py",
+      "size": 10182,
+      "sha256": "b5ca34f933200030bf8102607d641d162a410131be6a88707ffea109fcf347d8"
+    },
+    {
+      "path": "source/run_vma_residency_build.py",
+      "size": 2926,
+      "sha256": "ffb661ac6a29ca4b05677681692ae70d77937f38170ba3d7712cbfe992cdc059"
+    },
+    {
+      "path": "source/run_vma_residency_checks.py",
+      "size": 2463,
+      "sha256": "8fb1eee558f8baf27e0337b2a43cf0759b120471403dac4e84da25cbcaf1ce08"
+    },
+    {
+      "path": "source/run_vma_residency_checks_retry.py",
+      "size": 2470,
+      "sha256": "3ac97d3e608b42fbfd30d56f89631d71005600f308843f328ca657b98626fcaf"
+    },
+    {
+      "path": "source/runtime.rs",
+      "size": 229313,
+      "sha256": "c260c2ecf57f0b310a50b468b13890a55eeed59698ea39885c7d42b46e2ff638"
+    },
+    {
+      "path": "source/server_smoke.py",
+      "size": 10575,
+      "sha256": "a4e8c442c87462d9303caadd43261c9b7e077632fb6e6f4ec587b6eccad69c73"
+    },
+    {
+      "path": "source/spill_probe.py",
+      "size": 13793,
+      "sha256": "08daf4043ab600d1c60ce8d3e4788674e4d1ca7467b2a354292724b26a9f2616"
+    },
+    {
+      "path": "source/test_aggregate_strategy.py",
+      "size": 5906,
+      "sha256": "3148f976bfed0b0e2940e8005609172fbd58be8dab71bd9e4e34d3d67d5c2478"
+    },
+    {
+      "path": "source/test_choice_witness.py",
+      "size": 8069,
+      "sha256": "cc2eeed53650d6639d7ec4fc229d35b38e5dfccbcb871023611ac9926467381d"
+    },
+    {
+      "path": "source/test_cluster.py",
+      "size": 1280,
+      "sha256": "61d0f8758414ab640eb53b0bdffcdbd2da20dc1d9cd2c1200186764f238f66bc"
+    },
+    {
+      "path": "source/test_compare_regression.py",
+      "size": 8992,
+      "sha256": "f1479b2e9b61c9d5b22c10cf820380fb85734d88a6c4f7fd5c946537d6462a0f"
+    },
+    {
+      "path": "source/test_compare_resource.py",
+      "size": 13973,
+      "sha256": "f1e66ed22bf9c03cc5b51270cb0a0b89c4d9670624463ddc4554216dfce66800"
+    },
+    {
+      "path": "source/test_diagnostic_policy.py",
+      "size": 8261,
+      "sha256": "11087b4dca9f138a087d3dfb43fe8ffd27a4ee2d8cc9832c08fcbd0d8ce27c1f"
+    },
+    {
+      "path": "source/test_engine_regression_audit.py",
+      "size": 3196,
+      "sha256": "186f96a0fd5f44c701ff6dde5c545f28dd619c24147eb6056f967c2ad572a634"
+    },
+    {
+      "path": "source/test_engine_regression_profile.py",
+      "size": 5415,
+      "sha256": "4525766710671cc95060e99c3cee7c13fa79f31d3fb4fe285bf0f3a869af8cab"
+    },
+    {
+      "path": "source/test_fixed_workload.py",
+      "size": 2643,
+      "sha256": "2a5f0b4ff1da4aad4129f9edb30c50c5b3b17dad9556dc973479bd088c9173c4"
+    },
+    {
+      "path": "source/test_merge_trace.py",
+      "size": 4704,
+      "sha256": "5edec37aeabfb4e849e6f80f2effb12d8c34c21ff44a64b19a7f637be03f78d1"
+    },
+    {
+      "path": "source/test_regression_capture.py",
+      "size": 2112,
+      "sha256": "853faf2033f1375789b1f48e46d0b1bed5d169c6201598a4ed6a62b893134e73"
+    },
+    {
+      "path": "source/test_window_trace.py",
+      "size": 8756,
+      "sha256": "cc953a217918a660298eb98ea0140a0fccd6c5ccf3020499061cedfb3059ea2f"
+    },
+    {
+      "path": "source/test_worker_context.py",
+      "size": 4626,
+      "sha256": "41d1e68d5085efb94cd6572eb014c690310045a0e50105d9ffe6dc2767c42c05"
+    },
+    {
+      "path": "source/window_peer_probe.py",
+      "size": 11040,
+      "sha256": "741f7af1f0e86f34f76710a85d70ae3cc235f96b52b17b40458fb5912859efc7"
+    },
+    {
+      "path": "source/window_trace.py",
+      "size": 15795,
+      "sha256": "51c19853ef3cef8ee2a6175cd5115bc6f207ae4e02535573bc582b8c08ad25cb"
+    },
+    {
+      "path": "source/window_trace_probe.py",
+      "size": 7506,
+      "sha256": "4b59e2c0f8880f9b89238013b38744dbf1eeb7fa4c3b625ad51893976bdf6f07"
+    },
+    {
+      "path": "source/worker_context.py",
+      "size": 3327,
+      "sha256": "10af56350320e740acbb1b86dc2375df7c567afd7c69d554b0bf004ff9e3c62c"
+    }
+  ]
+}

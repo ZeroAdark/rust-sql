@@ -1,0 +1,13 @@
+{
+  "unit_tests": 61,
+  "negative_control_failed_as_expected": true,
+  "complete_live_cases": 4,
+  "checked_statements_including_warmup": 18240,
+  "committed_updates_verified_after_restart": 3840,
+  "protocol_groups_per_engine": 8,
+  "spill_rows": 500000,
+  "spill_memory_mib": 1024,
+  "naming_supported_host_exercised": false,
+  "new_performance_qualification": false,
+  "production_qualified": false
+}
